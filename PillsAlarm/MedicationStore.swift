@@ -859,9 +859,15 @@ final class CloudKitRepository {
     }
 
     func installWorkspaceSubscription(groupRecord: CKRecord, database: CKDatabase) async throws {
+        let zoneID = groupRecord.recordID.zoneID
+        let subscriptionID = [
+            "workspace-zone",
+            Self.subscriptionIdentifierComponent(zoneID.ownerName),
+            Self.subscriptionIdentifierComponent(zoneID.zoneName)
+        ].joined(separator: "-")
         let subscription = CKRecordZoneSubscription(
-            zoneID: groupRecord.recordID.zoneID,
-            subscriptionID: "workspace-zone-\(groupRecord.recordID.zoneID.zoneName)"
+            zoneID: zoneID,
+            subscriptionID: subscriptionID
         )
         let info = CKSubscription.NotificationInfo()
         info.shouldSendContentAvailable = true
@@ -967,6 +973,13 @@ final class CloudKitRepository {
             score += 1
         }
         return score
+    }
+
+    private static func subscriptionIdentifierComponent(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        return value.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? String(scalar) : "_"
+        }.joined()
     }
 
     private func fetchLinkedRecords(group: CKRecord, database: CKDatabase) async throws -> [CKRecord] {
