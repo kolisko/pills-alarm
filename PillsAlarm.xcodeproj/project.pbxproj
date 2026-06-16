@@ -22,6 +22,8 @@
 		A10000000000000000000013 /* CloudSharingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* CloudSharingView.swift */; };
 		A10000000000000000000014 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* Assets.xcassets */; };
 		A10000000000000000000015 /* CloudKitIntegrationRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* CloudKitIntegrationRunner.swift */; };
+		A10000000000000000000016 /* AlarmAuditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* AlarmAuditView.swift */; };
+		A10000000000000000000017 /* DoseAlarm.wav in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* DoseAlarm.wav */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +45,8 @@
 		A20000000000000000000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000017 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A20000000000000000000018 /* CloudKitIntegrationRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitIntegrationRunner.swift; sourceTree = "<group>"; };
+		A20000000000000000000019 /* AlarmAuditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmAuditView.swift; sourceTree = "<group>"; };
+		A20000000000000000000020 /* DoseAlarm.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = DoseAlarm.wav; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,6 +81,7 @@
 				A20000000000000000000015 /* PillsAlarm.entitlements */,
 				A20000000000000000000016 /* Info.plist */,
 				A20000000000000000000017 /* Assets.xcassets */,
+				A20000000000000000000020 /* DoseAlarm.wav */,
 				A40000000000000000000004 /* Views */,
 			);
 			path = PillsAlarm;
@@ -98,6 +103,7 @@
 				A20000000000000000000008 /* PlanView.swift */,
 				A20000000000000000000009 /* GroupView.swift */,
 				A20000000000000000000010 /* HistoryView.swift */,
+				A20000000000000000000019 /* AlarmAuditView.swift */,
 				A20000000000000000000011 /* SharedViews.swift */,
 				A20000000000000000000014 /* CloudSharingView.swift */,
 			);
@@ -163,6 +169,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000014 /* Assets.xcassets in Resources */,
+				A10000000000000000000017 /* DoseAlarm.wav in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -187,6 +194,7 @@
 				A10000000000000000000012 /* AppDelegate.swift in Sources */,
 				A10000000000000000000013 /* CloudSharingView.swift in Sources */,
 				A10000000000000000000015 /* CloudKitIntegrationRunner.swift in Sources */,
+				A10000000000000000000016 /* AlarmAuditView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -319,7 +327,7 @@
 				APS_ENVIRONMENT = development;
 				CODE_SIGN_ENTITLEMENTS = PillsAlarm/PillsAlarm.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 69V6Z9TN5K;
 				ENABLE_DEBUG_DYLIB = NO;
@@ -343,7 +351,7 @@
 				APS_ENVIRONMENT = production;
 				CODE_SIGN_ENTITLEMENTS = PillsAlarm/PillsAlarm.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 69V6Z9TN5K;
 				ENABLE_DEBUG_DYLIB = NO;

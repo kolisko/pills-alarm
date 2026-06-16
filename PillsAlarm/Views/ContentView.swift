@@ -45,6 +45,11 @@ struct ContentView: View {
                 .tabItem {
                     Label("Historie", systemImage: "clock.arrow.circlepath")
                 }
+
+            SettingsView()
+                .tabItem {
+                    Label("Nastavení", systemImage: "gearshape")
+                }
         }
         .tint(.teal)
         .onChange(of: store.medications) {
