@@ -1,0 +1,54 @@
+import SwiftUI
+
+struct HistoryView: View {
+    @EnvironmentObject private var store: MedicationStore
+
+    private var confirmations: [DoseConfirmation] {
+        store.confirmations.values.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if confirmations.isEmpty {
+                    EmptyStateView(title: "Zatím žádná historie", systemImage: "clock")
+                        .listRowBackground(Color.clear)
+                } else {
+                    ForEach(confirmations) { confirmation in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                StatusBadge(
+                                    text: confirmation.status.label,
+                                    systemImage: confirmation.status == .confirmed ? "checkmark.circle.fill" : "forward.circle.fill",
+                                    tint: confirmation.status == .confirmed ? .green : .orange
+                                )
+                                Spacer()
+                                Text(confirmation.timestamp.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(summary(for: confirmation))
+                                .font(.headline)
+                            Text("Plánováno \(confirmation.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+            .navigationTitle("Historie")
+            .refreshable {
+                await store.reload(showSyncIndicator: false)
+            }
+        }
+    }
+
+    private func summary(for confirmation: DoseConfirmation) -> String {
+        if confirmation.memberName.isEmpty {
+            return confirmation.amount
+        }
+
+        return "\(confirmation.amount) potvrdil/a \(confirmation.memberName)"
+    }
+}
