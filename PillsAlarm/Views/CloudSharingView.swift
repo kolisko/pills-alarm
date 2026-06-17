@@ -6,20 +6,10 @@ struct CloudSharingView: UIViewControllerRepresentable {
     let controller: CloudSharingController
 
     func makeUIViewController(context: Context) -> UICloudSharingController {
-        let sharingController = UICloudSharingController { _, completion in
-            Task { @MainActor in
-                do {
-                    let share = try await controller.cloud.prepareShare(
-                        groupRecord: controller.groupRecord,
-                        database: controller.database,
-                        title: controller.title
-                    )
-                    completion(share, CKContainer(identifier: CloudKitRepository.containerIdentifier), nil)
-                } catch {
-                    completion(nil, nil, error)
-                }
-            }
-        }
+        let sharingController = UICloudSharingController(
+            share: controller.share,
+            container: CKContainer(identifier: CloudKitRepository.containerIdentifier)
+        )
         sharingController.delegate = context.coordinator
         sharingController.availablePermissions = [.allowReadWrite, .allowPrivate]
         return sharingController

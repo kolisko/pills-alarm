@@ -3,6 +3,8 @@ import SwiftUI
 @MainActor
 final class CloudSyncCoordinator: ObservableObject {
     private var pendingReloadTask: Task<Void, Never>?
+    private var periodicReloadTask: Task<Void, Never>?
+    private var periodicReloadIntervalMinutes: Int?
     private var isReloading = false
     private var needsReload = false
     private var completions: [() -> Void] = []
@@ -27,6 +29,31 @@ final class CloudSyncCoordinator: ObservableObject {
         }
     }
 
+    func startPeriodicReload(store: MedicationStore, intervalMinutes: Int) {
+        let normalizedIntervalMinutes = SyncSettings.normalizedAutoRefreshIntervalMinutes(intervalMinutes)
+        if periodicReloadTask != nil, periodicReloadIntervalMinutes == normalizedIntervalMinutes {
+            return
+        }
+
+        stopPeriodicReload()
+        periodicReloadIntervalMinutes = normalizedIntervalMinutes
+        let intervalNanoseconds = UInt64(normalizedIntervalMinutes) * 60 * 1_000_000_000
+
+        periodicReloadTask = Task { [weak self, weak store] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: intervalNanoseconds)
+                guard !Task.isCancelled, let self, let store else { return }
+                self.scheduleReload(store: store, showSyncIndicator: false)
+            }
+        }
+    }
+
+    func stopPeriodicReload() {
+        periodicReloadTask?.cancel()
+        periodicReloadTask = nil
+        periodicReloadIntervalMinutes = nil
+    }
+
     private func performReloadIfNeeded(store: MedicationStore, showSyncIndicator: Bool) async {
         guard !isReloading else {
             needsReload = true
@@ -46,10 +73,22 @@ final class CloudSyncCoordinator: ObservableObject {
     }
 }
 
+enum SyncSettings {
+    static let autoRefreshIntervalMinutesKey = "sync.autoRefreshIntervalMinutes.v1"
+    static let defaultAutoRefreshIntervalMinutes = 5
+    static let minimumAutoRefreshIntervalMinutes = 1
+    static let maximumAutoRefreshIntervalMinutes = 60
+
+    static func normalizedAutoRefreshIntervalMinutes(_ value: Int) -> Int {
+        min(max(value, minimumAutoRefreshIntervalMinutes), maximumAutoRefreshIntervalMinutes)
+    }
+}
+
 @main
 struct PillsAlarmApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(SyncSettings.autoRefreshIntervalMinutesKey) private var autoRefreshIntervalMinutes = SyncSettings.defaultAutoRefreshIntervalMinutes
     @StateObject private var store = MedicationStore()
     @StateObject private var cloudSync = CloudSyncCoordinator()
 
@@ -68,6 +107,7 @@ struct PillsAlarmApp: App {
 #endif
 
                     await store.start()
+                    cloudSync.startPeriodicReload(store: store, intervalMinutes: autoRefreshIntervalMinutes)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .cloudKitDataDidChange)) { notification in
                     if let request = notification.object as? CloudKitRefreshRequest {
@@ -80,8 +120,15 @@ struct PillsAlarmApp: App {
                 }
                 .onChange(of: scenePhase) {
                     if scenePhase == .active {
+                        cloudSync.startPeriodicReload(store: store, intervalMinutes: autoRefreshIntervalMinutes)
                         cloudSync.scheduleReload(store: store, delayNanoseconds: 250_000_000)
+                    } else {
+                        cloudSync.stopPeriodicReload()
                     }
+                }
+                .onChange(of: autoRefreshIntervalMinutes) {
+                    guard scenePhase == .active else { return }
+                    cloudSync.startPeriodicReload(store: store, intervalMinutes: autoRefreshIntervalMinutes)
                 }
         }
     }

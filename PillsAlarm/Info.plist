@@ -20,6 +20,12 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>PillCareAPSEnvironment</key>
+	<string>$(APS_ENVIRONMENT)</string>
+	<key>PillCareCloudKitEnvironment</key>
+	<string>$(CLOUDKIT_ENVIRONMENT)</string>
+	<key>PillCareICloudContainer</key>
+	<string>iCloud.com.kolisko.pillcare</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.healthcare-fitness</string>
 	<key>LSRequiresIPhoneOS</key>

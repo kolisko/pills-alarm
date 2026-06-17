@@ -4,18 +4,25 @@ struct ContentView: View {
     @EnvironmentObject private var store: MedicationStore
 
     var body: some View {
-        appTabs
-            .overlay(alignment: .top) {
-                SyncOverlay()
+        Group {
+            if case .requiresICloudAccount(let message) = store.loadState {
+                ICloudAccountRequiredView(message: message)
                     .environmentObject(store)
+            } else {
+                appTabs
+                    .overlay(alignment: .top) {
+                        SyncOverlay()
+                            .environmentObject(store)
+                    }
+                    .sheet(isPresented: workspaceSelectionBinding) {
+                        WorkspaceSelectionView()
+                            .environmentObject(store)
+                            .interactiveDismissDisabled(true)
+                            .presentationDetents([.medium, .large])
+                            .presentationDragIndicator(.visible)
+                    }
             }
-            .sheet(isPresented: workspaceSelectionBinding) {
-                WorkspaceSelectionView()
-                    .environmentObject(store)
-                    .interactiveDismissDisabled(true)
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
-            }
+        }
     }
 
     private var workspaceSelectionBinding: Binding<Bool> {
@@ -221,6 +228,8 @@ private struct WorkspaceCandidateRow: View {
 
 private struct ICloudAccountRequiredView: View {
     @EnvironmentObject private var store: MedicationStore
+    @State private var isRetrying = false
+    @State private var retryMessage: String?
     var message: String
 
     var body: some View {
@@ -249,14 +258,40 @@ private struct ICloudAccountRequiredView: View {
                 .font(.headline)
 
                 Button {
-                    Task { await store.reload() }
+                    retryMessage = nil
+                    isRetrying = true
+                    Task {
+                        await store.reload()
+                        isRetrying = false
+
+                        if case .requiresICloudAccount = store.loadState {
+                            retryMessage = "Ověření doběhlo, ale iCloud ještě není připravený. Chvíli počkej a zkus to znovu."
+                        }
+                    }
                 } label: {
-                    Label("Zkusit znovu", systemImage: "arrow.clockwise")
+                    if isRetrying || store.isSyncing {
+                        HStack {
+                            ProgressView()
+                                .tint(.white)
+                            Text("Ověřuji iCloud")
+                        }
                         .frame(maxWidth: .infinity)
+                    } else {
+                        Label("Zkusit znovu", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .tint(.teal)
+                .disabled(isRetrying || store.isSyncing)
+
+                if let retryMessage {
+                    Label(retryMessage, systemImage: "info.circle")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Spacer()
             }

@@ -1,5 +1,37 @@
 import CloudKit
+import CryptoKit
 import Foundation
+
+struct WorkspaceSource: Identifiable, Hashable {
+    var id: String
+    var name: String
+    var isShared: Bool
+}
+
+struct MedicationListItem: Identifiable, Hashable {
+    var medication: Medication
+    var source: WorkspaceSource
+
+    var id: String {
+        "\(source.id)|\(medication.id.uuidString)"
+    }
+}
+
+struct ConfirmationListItem: Identifiable, Hashable {
+    var confirmation: DoseConfirmation
+    var source: WorkspaceSource
+
+    var id: String {
+        "\(source.id)|\(confirmation.eventId)"
+    }
+}
+
+struct SharedWorkspaceProfile: Identifiable, Hashable {
+    var id: String
+    var name: String
+    var currentMemberName: String
+    var otherMembers: [CareMember]
+}
 
 @MainActor
 final class MedicationStore: ObservableObject {
@@ -17,35 +49,99 @@ final class MedicationStore: ObservableObject {
     @Published private(set) var members: [CareMember] = []
     @Published var activeMemberId: UUID?
     @Published private(set) var medications: [Medication] = []
+    @Published private(set) var medicationItems: [MedicationListItem] = []
     @Published private(set) var confirmations: [String: DoseConfirmation] = [:]
+    @Published private(set) var confirmationItems: [ConfirmationListItem] = []
+    @Published private(set) var sharedWorkspaceProfiles: [SharedWorkspaceProfile] = []
     @Published private(set) var isSyncing = false
     @Published private(set) var syncErrorMessage: String?
     @Published private(set) var workspaceCandidates: [WorkspaceCandidate] = []
+    @Published private(set) var currentUserRecordName: String?
 
     private let cloud: CloudKitRepository
     private let defaults: UserDefaults
     private var groupRecord: CKRecord?
     private var groupDatabase: CKDatabase?
     private var groupDatabaseScope: CKDatabase.Scope?
+    private var workspaceContexts: [String: WorkspaceContext] = [:]
+    private var medicationWorkspaceIds: [UUID: String] = [:]
+    private var confirmationWorkspaceIds: [String: String] = [:]
+    private var personalWorkspaceId: String?
+    private var ownedGroupWorkspaceId: String?
     private var loadGeneration = 0
     private var syncOperationCount = 0
 
-    init(cloud: CloudKitRepository = CloudKitRepository(), defaults: UserDefaults = .standard) {
-        self.cloud = cloud
+    init(cloud: CloudKitRepository? = nil, defaults: UserDefaults = .standard) {
+        self.cloud = cloud ?? CloudKitRepository()
         self.defaults = defaults
     }
 
     var hasGroup: Bool {
-        !members.isEmpty
+        ownedGroupContext != nil
     }
 
     var hasCloudWorkspace: Bool {
-        groupRecord != nil
+        personalContext != nil
     }
 
     var activeMember: CareMember? {
-        guard let activeMemberId else { return nil }
-        return members.first(where: { $0.id == activeMemberId })
+        currentOwnedGroupMember
+    }
+
+    var currentMemberName: String {
+        currentOwnedGroupMember?.displayName ?? ""
+    }
+
+    var sharingGroupId: String? {
+        ownedGroupWorkspaceId
+    }
+
+    var sharingGroupName: String {
+        careGroupName
+    }
+
+    var canSharePlans: Bool {
+        ownedGroupContext != nil
+    }
+
+    var ownPlanItems: [MedicationListItem] {
+        medicationItems.filter { canManageSharing($0) }
+    }
+
+    var sharedOwnPlanItems: [MedicationListItem] {
+        medicationItems.filter { $0.source.id == ownedGroupWorkspaceId && canManageSharing($0) }
+    }
+
+    var privateOwnPlanItems: [MedicationListItem] {
+        medicationItems.filter { $0.source.id == personalWorkspaceId && canManageSharing($0) }
+    }
+
+    var canRecordDose: Bool {
+        !hasGroup || !currentMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func canRecordDose(_ dose: GeneratedDose) -> Bool {
+        guard let context = workspaceContexts[dose.workspaceId], context.isShared || !context.members.isEmpty else {
+            return true
+        }
+
+        return !currentMemberName(in: context).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func canEditMedication(_ item: MedicationListItem) -> Bool {
+        canManageSharing(item)
+    }
+
+    func canManageSharing(_ item: MedicationListItem) -> Bool {
+        guard let currentUserRecordName else {
+            return false
+        }
+
+        if item.medication.ownerUserRecordName == nil {
+            return item.source.id == personalWorkspaceId || item.source.id == ownedGroupWorkspaceId
+        }
+
+        return item.medication.ownerUserRecordName == currentUserRecordName
     }
 
     func start() async {
@@ -81,20 +177,21 @@ final class MedicationStore: ObservableObject {
                 return
             }
 
+            currentUserRecordName = try await cloud.currentUserRecordName()
+            guard generation == loadGeneration else { return }
+
             try await cloud.ensurePrivateZone()
             guard generation == loadGeneration else { return }
 
-            let resolvedSnapshot = try await loadGroupSnapshot()
+            let resolvedSnapshots = try await loadWorkspaceSnapshots()
 
             guard generation == loadGeneration else { return }
 
-            groupRecord = resolvedSnapshot.group
-            groupDatabase = resolvedSnapshot.database
-            groupDatabaseScope = resolvedSnapshot.databaseScope
-            saveStoredGroupReference(from: resolvedSnapshot)
-            apply(snapshot: resolvedSnapshot)
+            apply(snapshots: resolvedSnapshots)
 
-            try? await cloud.installWorkspaceSubscription(groupRecord: resolvedSnapshot.group, database: resolvedSnapshot.database)
+            for context in workspaceContexts.values {
+                try? await cloud.installWorkspaceSubscription(groupRecord: context.groupRecord, database: context.database)
+            }
 
             guard generation == loadGeneration else { return }
 
@@ -115,10 +212,11 @@ final class MedicationStore: ObservableObject {
         guard !cleanGroupName.isEmpty, !cleanMemberName.isEmpty else { return }
 
         do {
-            if let groupRecord, let groupDatabase {
-                let member = CareMember(displayName: cleanMemberName, colorHex: Self.memberColors[members.count % Self.memberColors.count])
-                let savedGroup = try await cloud.renameGroup(groupRecord: groupRecord, database: groupDatabase, name: cleanGroupName)
-                try await cloud.saveMember(member, groupRecord: savedGroup, database: groupDatabase)
+            let userRecordName = try await ensureCurrentUserRecordName()
+            if let context = ownedGroupContext {
+                let member = currentUserMemberForSaving(displayName: cleanMemberName, userRecordName: userRecordName)
+                let savedGroup = try await cloud.renameGroup(groupRecord: context.groupRecord, database: context.database, name: cleanGroupName)
+                try await cloud.saveMember(member, groupRecord: savedGroup, database: context.database)
                 self.groupRecord = savedGroup
                 groupDatabaseScope = .private
                 careGroupName = cleanGroupName
@@ -129,16 +227,16 @@ final class MedicationStore: ObservableObject {
                 return
             }
 
-            let snapshot = try await cloud.createGroup(name: cleanGroupName, firstMemberName: cleanMemberName)
+            let firstMember = currentUserMemberForSaving(displayName: cleanMemberName, userRecordName: userRecordName)
+            let snapshot = try await cloud.createGroup(name: cleanGroupName, firstMember: firstMember)
             groupRecord = snapshot.group
             groupDatabase = snapshot.database
             groupDatabaseScope = snapshot.databaseScope
+            ownedGroupWorkspaceId = Self.storedGroupReference(from: snapshot).id
             saveStoredGroupReference(from: snapshot)
             careGroupName = snapshot.name
             members = snapshot.members
             activeMemberId = snapshot.members.first?.id
-            medications = []
-            confirmations = [:]
             try? await cloud.installWorkspaceSubscription(groupRecord: snapshot.group, database: snapshot.database)
             loadState = .ready
             await reload()
@@ -148,7 +246,7 @@ final class MedicationStore: ObservableObject {
     }
 
     func setGroupName(_ name: String) async {
-        guard let groupRecord, let groupDatabase else { return }
+        guard let context = ownedGroupContext else { return }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { return }
 
@@ -156,7 +254,7 @@ final class MedicationStore: ObservableObject {
         defer { endSync() }
 
         do {
-            let saved = try await cloud.renameGroup(groupRecord: groupRecord, database: groupDatabase, name: cleanName)
+            let saved = try await cloud.renameGroup(groupRecord: context.groupRecord, database: context.database, name: cleanName)
             self.groupRecord = saved
             careGroupName = cleanName
         } catch {
@@ -164,16 +262,124 @@ final class MedicationStore: ObservableObject {
         }
     }
 
+    func saveGroupSettings(name: String, myName: String) async {
+        guard let context = ownedGroupContext else { return }
+        let cleanGroupName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanMemberName = myName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanGroupName.isEmpty, !cleanMemberName.isEmpty else { return }
+
+        beginSync()
+        defer { endSync() }
+
+        do {
+            let userRecordName = try await ensureCurrentUserRecordName()
+            let savedGroup = try await cloud.renameGroup(groupRecord: context.groupRecord, database: context.database, name: cleanGroupName)
+            let member = currentUserMemberForSaving(displayName: cleanMemberName, userRecordName: userRecordName)
+            try await cloud.saveMember(member, groupRecord: savedGroup, database: context.database)
+
+            self.groupRecord = savedGroup
+            careGroupName = cleanGroupName
+            upsertMemberLocally(member)
+            activeMemberId = member.id
+
+            if let ownedGroupWorkspaceId,
+               var updatedContext = workspaceContexts[ownedGroupWorkspaceId] {
+                updatedContext.groupRecord = savedGroup
+                updatedContext.name = cleanGroupName
+                updatedContext.source = WorkspaceSource(id: updatedContext.id, name: cleanGroupName, isShared: true)
+                workspaceContexts[ownedGroupWorkspaceId] = updatedContext
+            }
+
+            loadState = .ready
+            NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
+            Task { await reload() }
+        } catch {
+            recordSyncError(error)
+        }
+    }
+
+    func saveSharedWorkspaceProfile(workspaceId: String, myName: String) async {
+        guard var context = workspaceContexts[workspaceId], context.isShared else { return }
+        let cleanMemberName = myName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanMemberName.isEmpty else { return }
+
+        beginSync()
+        defer { endSync() }
+
+        do {
+            let userRecordName = try await ensureCurrentUserRecordName()
+            let currentMember = currentUserMember(in: context)
+            let member = CareMember(
+                id: currentMember?.id ?? Self.memberId(forUserRecordName: userRecordName),
+                displayName: cleanMemberName,
+                colorHex: currentMember?.colorHex ?? Self.memberColors[context.members.count % Self.memberColors.count],
+                userRecordName: userRecordName
+            )
+
+            try await cloud.saveMember(member, groupRecord: context.groupRecord, database: context.database)
+
+            if let index = context.members.firstIndex(where: { $0.id == member.id }) {
+                context.members[index] = member
+            } else {
+                context.members.append(member)
+            }
+            workspaceContexts[workspaceId] = context
+            refreshSharedWorkspaceProfiles()
+            NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
+            Task { await reload() }
+        } catch {
+            recordSyncError(error)
+        }
+    }
+
     func doses(on date: Date) -> [GeneratedDose] {
-        ScheduleEngine.doses(on: date, medications: medications)
+        medicationItems.flatMap { item in
+            ScheduleEngine.doses(
+                on: date,
+                medication: item.medication,
+                workspaceId: item.source.id,
+                isShared: item.source.isShared,
+                workspaceName: item.source.name
+            )
+        }
+        .sorted {
+            if $0.scheduledDate == $1.scheduledDate {
+                return $0.medicationName < $1.medicationName
+            }
+            return $0.scheduledDate < $1.scheduledDate
+        }
     }
 
     func confirmation(for dose: GeneratedDose) -> DoseConfirmation? {
-        confirmations[dose.id]
+        confirmations[dose.id] ?? confirmations[dose.baseEventId]
+    }
+
+    private func confirmationEventIds(for dose: GeneratedDose, including confirmation: DoseConfirmation? = nil) -> [String] {
+        var eventIds: [String] = []
+        for eventId in [dose.id, dose.baseEventId, confirmation?.eventId].compactMap({ $0 }) {
+            if !eventIds.contains(eventId) {
+                eventIds.append(eventId)
+            }
+        }
+        return eventIds
+    }
+
+    func displayName(for confirmation: DoseConfirmation) -> String? {
+        let workspaceId = confirmationWorkspaceIds[confirmation.eventId] ?? personalWorkspaceId
+        let member = workspaceId.flatMap { workspaceContexts[$0]?.members.first { $0.id == confirmation.memberId } }
+            ?? members.first { $0.id == confirmation.memberId }
+        let name = member?.displayName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? nil : name
     }
 
     func confirm(_ dose: GeneratedDose, status: DoseStatus, note: String = "") async throws {
-        let member = activeMember
+        guard let context = context(for: dose) else {
+            let error = StoreError.missingCloudWorkspace
+            recordSyncError(error)
+            throw error
+        }
+
+        let memberId = try await currentConfirmationMemberId(in: context)
 
         let confirmation = DoseConfirmation(
             eventId: dose.id,
@@ -182,26 +388,27 @@ final class MedicationStore: ObservableObject {
             scheduledDate: dose.scheduledDate,
             amount: dose.amount,
             status: status,
-            memberId: member?.id ?? Self.personalConfirmationMemberId,
-            memberName: member?.displayName ?? "",
+            memberId: memberId,
+            memberName: "",
             timestamp: Date(),
             note: note
         )
-
-        guard let groupRecord, let groupDatabase else {
-            let error = StoreError.missingCloudWorkspace
-            recordSyncError(error)
-            throw error
-        }
 
         beginSync()
         defer { endSync() }
 
         do {
-            try await cloud.saveConfirmation(confirmation, groupRecord: groupRecord, database: groupDatabase)
+            for eventId in confirmationEventIds(for: dose, including: confirmation) {
+                if try await cloud.fetchConfirmation(eventId: eventId, groupRecord: context.groupRecord, database: context.database) != nil {
+                    await reload(showSyncIndicator: false)
+                    return
+                }
+            }
+            try await cloud.saveConfirmation(confirmation, groupRecord: context.groupRecord, database: context.database)
             confirmations[confirmation.eventId] = confirmation
+            upsertConfirmationItemLocally(confirmation, source: context.source)
+            confirmationWorkspaceIds[confirmation.eventId] = context.id
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
-            Task { await reload() }
         } catch {
             recordSyncError(error)
             throw error
@@ -209,7 +416,7 @@ final class MedicationStore: ObservableObject {
     }
 
     func undoConfirmation(for dose: GeneratedDose) async throws {
-        guard let groupRecord, let groupDatabase else {
+        guard let context = context(for: dose) else {
             let error = StoreError.missingCloudWorkspace
             recordSyncError(error)
             throw error
@@ -219,10 +426,27 @@ final class MedicationStore: ObservableObject {
         defer { endSync() }
 
         do {
-            try await cloud.deleteConfirmation(eventId: dose.id, groupRecord: groupRecord, database: groupDatabase)
-            confirmations.removeValue(forKey: dose.id)
+            let existingConfirmation = confirmation(for: dose)
+            let eventIds = confirmationEventIds(for: dose, including: existingConfirmation)
+
+            var deletedAnyConfirmation = false
+            for eventId in eventIds {
+                if try await cloud.fetchConfirmation(eventId: eventId, groupRecord: context.groupRecord, database: context.database) != nil {
+                    try await cloud.deleteConfirmation(eventId: eventId, groupRecord: context.groupRecord, database: context.database)
+                    deletedAnyConfirmation = true
+                }
+            }
+
+            if !deletedAnyConfirmation, let existingConfirmation {
+                try await cloud.deleteConfirmation(eventId: existingConfirmation.eventId, groupRecord: context.groupRecord, database: context.database)
+            }
+
+            for eventId in eventIds {
+                confirmations.removeValue(forKey: eventId)
+                confirmationWorkspaceIds.removeValue(forKey: eventId)
+            }
+            confirmationItems.removeAll { eventIds.contains($0.confirmation.eventId) }
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
-            Task { await reload() }
         } catch {
             recordSyncError(error)
             throw error
@@ -244,9 +468,9 @@ final class MedicationStore: ObservableObject {
                     title: "Základní dávkování",
                     durationDays: nil,
                     doses: [
-                        DoseEntry(timeId: morning.id, amount: "0"),
-                        DoseEntry(timeId: noon.id, amount: "0"),
-                        DoseEntry(timeId: evening.id, amount: "0")
+                        DoseEntry(timeId: morning.id, amount: 0),
+                        DoseEntry(timeId: noon.id, amount: 0),
+                        DoseEntry(timeId: evening.id, amount: 0)
                     ]
                 )
             ]
@@ -254,22 +478,22 @@ final class MedicationStore: ObservableObject {
     }
 
     func upsertMedication(_ medication: Medication) async throws {
-        guard let groupRecord, let groupDatabase else {
+        guard let context = targetContext(for: medication) else {
             let error = StoreError.missingCloudWorkspace
             recordSyncError(error)
             throw error
         }
+        var medicationToSave = medication
+        medicationToSave.ownerUserRecordName = medicationToSave.ownerUserRecordName ?? currentUserRecordName
 
         beginSync()
         defer { endSync() }
 
         do {
-            try await cloud.saveMedication(medication, groupRecord: groupRecord, database: groupDatabase)
-            upsertMedicationLocally(medication)
+            try await cloud.saveMedication(medicationToSave, groupRecord: context.groupRecord, database: context.database)
+            upsertMedicationLocally(medicationToSave, source: source(for: context, medication: medicationToSave))
             loadState = .ready
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
-
-            Task { await reload() }
         } catch {
             recordSyncError(error)
             throw error
@@ -277,14 +501,19 @@ final class MedicationStore: ObservableObject {
     }
 
     func deleteMedication(_ medication: Medication) {
-        guard let groupRecord, let groupDatabase else { return }
+        guard let workspaceId = medicationWorkspaceIds[medication.id],
+              let context = workspaceContexts[workspaceId],
+              !context.isShared else {
+            return
+        }
 
         Task {
             beginSync()
             defer { endSync() }
 
             do {
-                try await cloud.deleteMedication(medication, groupRecord: groupRecord, database: groupDatabase)
+                try await deleteConfirmations(for: medication.id, in: context)
+                try await cloud.deleteMedication(medication, groupRecord: context.groupRecord, database: context.database)
                 await reload()
             } catch {
                 recordSyncError(error)
@@ -292,8 +521,90 @@ final class MedicationStore: ObservableObject {
         }
     }
 
+    func deleteMedication(_ item: MedicationListItem) {
+        guard let context = workspaceContexts[item.source.id], !context.isShared else {
+            return
+        }
+
+        Task {
+            beginSync()
+            defer { endSync() }
+
+            do {
+                try await deleteConfirmations(for: item.medication.id, in: context)
+                try await cloud.deleteMedication(item.medication, groupRecord: context.groupRecord, database: context.database)
+                await reload()
+            } catch {
+                recordSyncError(error)
+            }
+        }
+    }
+
+    func setMedication(_ item: MedicationListItem, updatedMedication: Medication? = nil, sharedWithOwnedGroup shouldShare: Bool) async throws {
+        guard canManageSharing(item) else {
+            let error = StoreError.notPlanOwner
+            recordSyncError(error)
+            throw error
+        }
+
+        guard let sourceContext = workspaceContexts[item.source.id],
+              let personalContext else {
+            let error = StoreError.missingCloudWorkspace
+            recordSyncError(error)
+            throw error
+        }
+
+        let destinationContext: WorkspaceContext
+        if shouldShare {
+            guard let ownedGroupContext else {
+                let error = StoreError.missingGroup
+                recordSyncError(error)
+                throw error
+            }
+            destinationContext = ownedGroupContext
+        } else {
+            destinationContext = personalContext
+        }
+
+        guard sourceContext.id != destinationContext.id else { return }
+
+        beginSync()
+        defer { endSync() }
+
+        do {
+            let sourceConfirmations = confirmationsForMedication(item.medication.id, in: sourceContext)
+            let updatedConfirmations = sourceConfirmations
+                .map { confirmationForSharingChange($0, to: destinationContext) }
+            var medicationForSharingChange = updatedMedication ?? item.medication
+            medicationForSharingChange.ownerUserRecordName = medicationForSharingChange.ownerUserRecordName ?? currentUserRecordName
+            medicationForSharingChange.sharedGroupId = shouldShare ? destinationContext.id : nil
+
+            try await cloud.saveMedication(medicationForSharingChange, groupRecord: destinationContext.groupRecord, database: destinationContext.database)
+            for confirmation in updatedConfirmations {
+                try await cloud.saveConfirmation(confirmation, groupRecord: destinationContext.groupRecord, database: destinationContext.database)
+            }
+            try await deleteConfirmations(for: item.medication.id, in: sourceContext)
+            if !isSameCloudRecordLocation(sourceContext, destinationContext) {
+                try await cloud.deleteMedication(item.medication, groupRecord: sourceContext.groupRecord, database: sourceContext.database)
+            }
+
+            applySharingChangeLocally(
+                medicationForSharingChange,
+                updatedConfirmations: updatedConfirmations,
+                originalConfirmationEventIds: sourceConfirmations.map(\.eventId),
+                from: sourceContext,
+                to: destinationContext
+            )
+            loadState = .ready
+            NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
+        } catch {
+            recordSyncError(error)
+            throw error
+        }
+    }
+
     func addMember(named name: String) {
-        guard let groupRecord, let groupDatabase else { return }
+        guard let context = ownedGroupContext else { return }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { return }
 
@@ -303,7 +614,7 @@ final class MedicationStore: ObservableObject {
             defer { endSync() }
 
             do {
-                try await cloud.saveMember(member, groupRecord: groupRecord, database: groupDatabase)
+                try await cloud.saveMember(member, groupRecord: context.groupRecord, database: context.database)
                 await reload()
             } catch {
                 recordSyncError(error)
@@ -311,15 +622,33 @@ final class MedicationStore: ObservableObject {
         }
     }
 
+    func setCurrentMemberName(_ name: String) async {
+        guard let context = ownedGroupContext else { return }
+
+        beginSync()
+        defer { endSync() }
+
+        do {
+            let userRecordName = try await ensureCurrentUserRecordName()
+            let member = currentUserMemberForSaving(displayName: name, userRecordName: userRecordName)
+            try await cloud.saveMember(member, groupRecord: context.groupRecord, database: context.database)
+            upsertMemberLocally(member)
+            activeMemberId = member.id
+            Task { await reload() }
+        } catch {
+            recordSyncError(error)
+        }
+    }
+
     func updateMember(_ member: CareMember) {
-        guard let groupRecord, let groupDatabase else { return }
+        guard let context = ownedGroupContext else { return }
 
         Task {
             beginSync()
             defer { endSync() }
 
             do {
-                try await cloud.saveMember(member, groupRecord: groupRecord, database: groupDatabase)
+                try await cloud.saveMember(member, groupRecord: context.groupRecord, database: context.database)
                 await reload()
             } catch {
                 recordSyncError(error)
@@ -328,14 +657,14 @@ final class MedicationStore: ObservableObject {
     }
 
     func deleteMember(_ member: CareMember) {
-        guard let groupRecord, let groupDatabase else { return }
+        guard let context = ownedGroupContext else { return }
 
         Task {
             beginSync()
             defer { endSync() }
 
             do {
-                try await cloud.deleteMember(member, groupRecord: groupRecord, database: groupDatabase)
+                try await cloud.deleteMember(member, groupRecord: context.groupRecord, database: context.database)
                 await reload()
             } catch {
                 recordSyncError(error)
@@ -343,13 +672,37 @@ final class MedicationStore: ObservableObject {
         }
     }
 
-    func makeSharingController() -> CloudSharingController? {
-        guard let groupRecord, let groupDatabase else { return nil }
-        return CloudSharingController(cloud: cloud, groupRecord: groupRecord, database: groupDatabase, title: careGroupName)
+    func prepareSharingController() async -> CloudSharingController? {
+        guard let context = ownedGroupContext else {
+            recordSyncError(StoreError.missingCloudWorkspace)
+            return nil
+        }
+
+        beginSync()
+        defer { endSync() }
+
+        do {
+            let prepared = try await cloud.prepareShare(
+                groupRecord: context.groupRecord,
+                database: context.database,
+                title: careGroupName
+            )
+            self.groupRecord = prepared.groupRecord
+            return CloudSharingController(
+                share: prepared.share,
+                groupRecord: prepared.groupRecord,
+                database: context.database,
+                title: careGroupName
+            )
+        } catch {
+            recordSyncError(error)
+            return nil
+        }
     }
 
     static func acceptShare(_ metadata: CKShare.Metadata) async throws {
-        try await CloudKitRepository().acceptShare(metadata)
+        let reference = try await CloudKitRepository().acceptShare(metadata)
+        saveStoredGroupReference(reference, defaults: .standard)
     }
 
     func dismissSyncError() {
@@ -404,6 +757,16 @@ final class MedicationStore: ObservableObject {
         }
     }
 
+    func removeSharedWorkspace(workspaceId: String) async {
+        beginSync()
+        defer { endSync() }
+
+        var hidden = hiddenSharedWorkspaceIds
+        hidden.insert(workspaceId)
+        saveHiddenSharedWorkspaceIds(hidden)
+        await reload()
+    }
+
     private func beginSync() {
         syncOperationCount += 1
         syncErrorMessage = nil
@@ -423,11 +786,19 @@ final class MedicationStore: ObservableObject {
         groupRecord = nil
         groupDatabase = nil
         groupDatabaseScope = nil
+        workspaceContexts = [:]
+        medicationWorkspaceIds = [:]
+        confirmationWorkspaceIds = [:]
+        personalWorkspaceId = nil
+        ownedGroupWorkspaceId = nil
         careGroupName = ""
         members = []
         activeMemberId = nil
         medications = []
+        medicationItems = []
         confirmations = [:]
+        confirmationItems = []
+        sharedWorkspaceProfiles = []
     }
 
     private func loadGroupSnapshot() async throws -> CloudSnapshot {
@@ -442,33 +813,470 @@ final class MedicationStore: ObservableObject {
         return try await cloud.ensurePersonalWorkspace()
     }
 
+    private func loadWorkspaceSnapshots() async throws -> [CloudSnapshot] {
+        workspaceCandidates = []
+
+        let personalSnapshot = try await cloud.ensurePersonalWorkspace()
+        let allSnapshots = try await cloud.fetchAllGroupSnapshots()
+        let privateGroupSnapshots = allSnapshots.filter {
+            $0.databaseScope == .private && !cloud.isCanonicalPersonalWorkspace($0) && !$0.members.isEmpty
+        }
+        let sharedSnapshots = allSnapshots.filter { $0.databaseScope == .shared }
+        let hiddenSharedIds = hiddenSharedWorkspaceIds
+        var snapshots = [personalSnapshot]
+        var seenIds = Set([Self.storedGroupReference(from: personalSnapshot).id])
+
+        for snapshot in privateGroupSnapshots {
+            let id = Self.storedGroupReference(from: snapshot).id
+            guard !seenIds.contains(id) else { continue }
+            snapshots.append(snapshot)
+            seenIds.insert(id)
+        }
+
+        for snapshot in sharedSnapshots {
+            let id = Self.storedGroupReference(from: snapshot).id
+            guard !seenIds.contains(id), !hiddenSharedIds.contains(id) else { continue }
+            snapshots.append(snapshot)
+            seenIds.insert(id)
+        }
+
+        return snapshots
+    }
+
     private func fail(_ error: Error) {
         let message = Self.userMessage(for: error)
         syncErrorMessage = message
         loadState = .failed(message)
     }
 
-    private func upsertMedicationLocally(_ medication: Medication) {
-        if let index = medications.firstIndex(where: { $0.id == medication.id }) {
-            medications[index] = medication
+    private func upsertMedicationLocally(_ medication: Medication, source: WorkspaceSource? = nil) {
+        let resolvedSource = source
+            ?? medicationWorkspaceIds[medication.id].flatMap { workspaceContexts[$0]?.source }
+            ?? personalContext?.source
+
+        if let resolvedSource {
+            let item = MedicationListItem(medication: medication, source: resolvedSource)
+            if let index = medicationItems.firstIndex(where: { $0.id == item.id }) {
+                medicationItems[index] = item
+            } else {
+                medicationItems.append(item)
+            }
+            medicationWorkspaceIds[medication.id] = resolvedSource.id
         } else {
-            medications.append(medication)
+            if let index = medications.firstIndex(where: { $0.id == medication.id }) {
+                medications[index] = medication
+            } else {
+                medications.append(medication)
+            }
         }
 
-        medications.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        sortMedicationViews()
+    }
+
+    private func upsertConfirmationItemLocally(_ confirmation: DoseConfirmation, source: WorkspaceSource) {
+        let item = ConfirmationListItem(confirmation: confirmation, source: source)
+        if let index = confirmationItems.firstIndex(where: { $0.id == item.id }) {
+            confirmationItems[index] = item
+        } else {
+            confirmationItems.append(item)
+        }
+        confirmationItems.sort { $0.confirmation.timestamp > $1.confirmation.timestamp }
+    }
+
+    private func upsertMemberLocally(_ member: CareMember) {
+        if let index = members.firstIndex(where: { $0.id == member.id }) {
+            members[index] = member
+        } else {
+            members.append(member)
+        }
+
+        sortMembers()
+
+        if let ownedGroupWorkspaceId,
+           var context = workspaceContexts[ownedGroupWorkspaceId] {
+            if let index = context.members.firstIndex(where: { $0.id == member.id }) {
+                context.members[index] = member
+            } else {
+                context.members.append(member)
+            }
+            workspaceContexts[ownedGroupWorkspaceId] = context
+        }
+    }
+
+    private func relinkPersonalConfirmations(to member: CareMember, userRecordName: String, groupRecord: CKRecord, database: CKDatabase) async throws {
+        let stablePersonalMemberId = Self.memberId(forUserRecordName: userRecordName)
+        let knownMemberIds = Set(members.map(\.id))
+        let canClaimOrphanedPrivateConfirmations = groupDatabaseScope == .private
+        var changedConfirmations: [DoseConfirmation] = []
+
+        for confirmation in confirmations.values {
+            if let personalWorkspaceId,
+               let confirmationWorkspaceId = confirmationWorkspaceIds[confirmation.eventId],
+               confirmationWorkspaceId != personalWorkspaceId {
+                continue
+            }
+
+            let isAlreadyLinked = confirmation.memberId == member.id
+            let isLegacyPersonal = confirmation.memberId == Self.legacyPersonalConfirmationMemberId
+            let isStablePersonal = confirmation.memberId == stablePersonalMemberId
+            let isOrphaned = !knownMemberIds.contains(confirmation.memberId)
+
+            guard !isAlreadyLinked,
+                  isLegacyPersonal || isStablePersonal || (canClaimOrphanedPrivateConfirmations && isOrphaned) else {
+                continue
+            }
+
+            var updated = confirmation
+            updated.memberId = member.id
+            updated.memberName = ""
+            changedConfirmations.append(updated)
+        }
+
+        for confirmation in changedConfirmations {
+            try await cloud.saveConfirmation(confirmation, groupRecord: groupRecord, database: database)
+            confirmations[confirmation.eventId] = confirmation
+            if let source = personalContext?.source {
+                upsertConfirmationItemLocally(confirmation, source: source)
+            }
+        }
     }
 
     private func apply(snapshot: CloudSnapshot) {
-        careGroupName = snapshot.name
-        members = snapshot.members.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-        medications = snapshot.medications.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        confirmations = Dictionary(uniqueKeysWithValues: snapshot.confirmations.map { ($0.eventId, $0) })
+        apply(snapshots: [snapshot])
+    }
 
-        if let activeMemberId, members.contains(where: { $0.id == activeMemberId }) {
-            self.activeMemberId = activeMemberId
-        } else {
-            activeMemberId = members.first?.id
+    private func applySharingChangeLocally(
+        _ medication: Medication,
+        updatedConfirmations: [DoseConfirmation],
+        originalConfirmationEventIds: [String],
+        from sourceContext: WorkspaceContext,
+        to destinationContext: WorkspaceContext
+    ) {
+        workspaceContexts[sourceContext.id]?.medications.removeAll { $0.id == medication.id }
+        workspaceContexts[destinationContext.id]?.medications.removeAll { $0.id == medication.id }
+        workspaceContexts[destinationContext.id]?.medications.append(medication)
+
+        workspaceContexts[sourceContext.id]?.confirmations.removeAll { $0.medicationId == medication.id }
+        workspaceContexts[destinationContext.id]?.confirmations.removeAll { $0.medicationId == medication.id }
+        workspaceContexts[destinationContext.id]?.confirmations.append(contentsOf: updatedConfirmations)
+
+        medicationItems.removeAll { $0.medication.id == medication.id }
+        let destinationSource = source(for: destinationContext, medication: medication)
+        medicationItems.append(MedicationListItem(medication: medication, source: destinationSource))
+        medicationWorkspaceIds[medication.id] = destinationContext.id
+
+        for eventId in originalConfirmationEventIds {
+            confirmations.removeValue(forKey: eventId)
+            confirmationWorkspaceIds.removeValue(forKey: eventId)
         }
+        confirmationItems.removeAll { $0.confirmation.medicationId == medication.id }
+
+        for confirmation in updatedConfirmations {
+            confirmations[confirmation.eventId] = confirmation
+            confirmationWorkspaceIds[confirmation.eventId] = destinationContext.id
+            confirmationItems.append(ConfirmationListItem(confirmation: confirmation, source: destinationSource))
+        }
+
+        sortMedicationViews()
+        confirmationItems.sort { $0.confirmation.timestamp > $1.confirmation.timestamp }
+        refreshSharedWorkspaceProfiles()
+    }
+
+    private func apply(snapshots: [CloudSnapshot]) {
+        let contexts = snapshots.map { WorkspaceContext(snapshot: $0) }
+        workspaceContexts = Dictionary(uniqueKeysWithValues: contexts.map { ($0.id, $0) })
+
+        guard let personal = contexts.first(where: { cloud.isCanonicalPersonalReference($0.reference) }) ?? contexts.first(where: { !$0.isShared }) ?? contexts.first else {
+            clearLoadedData()
+            return
+        }
+
+        let ownedGroup = contexts.first {
+            !$0.isShared && $0.id != personal.id && !$0.members.isEmpty
+        }
+
+        personalWorkspaceId = personal.id
+        ownedGroupWorkspaceId = ownedGroup?.id
+        groupRecord = ownedGroup?.groupRecord
+        groupDatabase = ownedGroup?.database
+        groupDatabaseScope = ownedGroup?.databaseScope
+        saveStoredGroupReference(from: CloudSnapshot(
+            group: personal.groupRecord,
+            database: personal.database,
+            databaseScope: personal.databaseScope,
+            name: personal.name,
+            members: personal.members,
+            medications: personal.medications,
+            confirmations: personal.confirmations
+        ))
+
+        careGroupName = ownedGroup?.name ?? ""
+        members = ownedGroup?.members ?? []
+        sortMembers()
+        activeMemberId = currentOwnedGroupMember?.id
+
+        medicationWorkspaceIds = [:]
+        confirmationWorkspaceIds = [:]
+        medicationItems = []
+        confirmationItems = []
+        confirmations = [:]
+
+        for context in contexts {
+            for medication in context.medications {
+                let source = source(for: context, medication: medication)
+                medicationItems.append(MedicationListItem(medication: medication, source: source))
+                medicationWorkspaceIds[medication.id] = context.id
+            }
+        }
+
+        let validConfirmationKeys = Set(medicationItems.flatMap { item -> [String] in
+            let contextId = item.source.id
+            return item.medication.doseTimes.flatMap { doseTime in
+                let base = "\(item.medication.id.uuidString)-\(doseTime.id.uuidString)"
+                return contextId == personalWorkspaceId ? [base, "\(contextId)|\(base)"] : ["\(contextId)|\(base)"]
+            }
+        })
+
+        for context in contexts {
+            for confirmation in context.confirmations {
+                guard validConfirmationKeys.contains(Self.confirmationSlotKey(confirmation.eventId)) else {
+                    continue
+                }
+                let source = source(for: context, medicationId: confirmation.medicationId)
+                let item = ConfirmationListItem(confirmation: confirmation, source: source)
+                confirmationItems.append(item)
+                confirmations[confirmation.eventId] = confirmation
+                confirmationWorkspaceIds[confirmation.eventId] = context.id
+            }
+        }
+
+        sortMedicationViews()
+        confirmationItems.sort { $0.confirmation.timestamp > $1.confirmation.timestamp }
+        sharedWorkspaceProfiles = contexts
+            .filter { $0.isShared }
+            .map { context in
+                SharedWorkspaceProfile(
+                    id: context.id,
+                    name: context.name,
+                    currentMemberName: currentMemberName(in: context),
+                    otherMembers: otherMembers(in: context)
+                )
+            }
+
+    }
+
+    private func refreshSharedWorkspaceProfiles() {
+        sharedWorkspaceProfiles = workspaceContexts.values
+            .filter(\.isShared)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { context in
+                SharedWorkspaceProfile(
+                    id: context.id,
+                    name: context.name,
+                    currentMemberName: currentMemberName(in: context),
+                    otherMembers: otherMembers(in: context)
+                )
+            }
+    }
+
+    private func sortMembers() {
+        members.sort { lhs, rhs in
+            lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    private func sortMedicationViews() {
+        medicationItems.sort { lhs, rhs in
+            if lhs.source.isShared != rhs.source.isShared {
+                return !lhs.source.isShared
+            }
+            return lhs.medication.name.localizedCaseInsensitiveCompare(rhs.medication.name) == .orderedAscending
+        }
+        medications = medicationItems.map(\.medication)
+    }
+
+    private func targetContext(for medication: Medication) -> WorkspaceContext? {
+        if let sharedGroupId = medication.sharedGroupId {
+            return workspaceContexts[sharedGroupId]
+        }
+
+        return personalContext
+    }
+
+    private func confirmationsForMedication(_ medicationId: UUID, in context: WorkspaceContext) -> [DoseConfirmation] {
+        context.confirmations.filter { $0.medicationId == medicationId }
+    }
+
+    private func deleteConfirmations(for medicationId: UUID, in context: WorkspaceContext) async throws {
+        for confirmation in confirmationsForMedication(medicationId, in: context) {
+            try await cloud.deleteConfirmation(eventId: confirmation.eventId, groupRecord: context.groupRecord, database: context.database)
+        }
+    }
+
+    private func confirmationForSharingChange(_ confirmation: DoseConfirmation, to destination: WorkspaceContext) -> DoseConfirmation {
+        var updated = confirmation
+        let baseEventId = Self.baseEventId(from: confirmation.eventId)
+        updated.eventId = destination.id == personalWorkspaceId ? baseEventId : "\(destination.id)|\(baseEventId)"
+        return updated
+    }
+
+    private func isSameCloudRecordLocation(_ lhs: WorkspaceContext, _ rhs: WorkspaceContext) -> Bool {
+        lhs.databaseScope == rhs.databaseScope
+            && lhs.groupRecord.recordID.zoneID == rhs.groupRecord.recordID.zoneID
+    }
+
+    private static func baseEventId(from eventId: String) -> String {
+        guard let separator = eventId.range(of: "|", options: .backwards) else {
+            return eventId
+        }
+
+        return String(eventId[separator.upperBound...])
+    }
+
+    private func source(for context: WorkspaceContext, medication: Medication) -> WorkspaceSource {
+        WorkspaceSource(
+            id: context.id,
+            name: context.name,
+            isShared: context.isShared || context.id == ownedGroupWorkspaceId || medication.sharedGroupId != nil
+        )
+    }
+
+    private func source(for context: WorkspaceContext, medicationId: UUID) -> WorkspaceSource {
+        let medication = context.medications.first { $0.id == medicationId }
+        return WorkspaceSource(
+            id: context.id,
+            name: context.name,
+            isShared: context.isShared || context.id == ownedGroupWorkspaceId || medication?.sharedGroupId != nil
+        )
+    }
+
+    private static func confirmationSlotKey(_ eventId: String) -> String {
+        if let separator = eventId.range(of: "|", options: .backwards) {
+            let workspaceId = String(eventId[..<separator.lowerBound])
+            let baseEventId = String(eventId[separator.upperBound...])
+            let baseParts = baseEventId.split(separator: "-").map(String.init)
+            guard baseParts.count >= 11 else { return eventId }
+            let medicationId = baseParts.prefix(5).joined(separator: "-")
+            let timeId = baseParts.dropFirst(5).prefix(5).joined(separator: "-")
+            return "\(workspaceId)|\(medicationId)-\(timeId)"
+        }
+
+        let baseParts = eventId.split(separator: "-").map(String.init)
+        guard baseParts.count >= 11 else { return eventId }
+        let medicationId = baseParts.prefix(5).joined(separator: "-")
+        let timeId = baseParts.dropFirst(5).prefix(5).joined(separator: "-")
+        return "\(medicationId)-\(timeId)"
+    }
+
+    private var currentOwnedGroupMember: CareMember? {
+        guard let ownedGroupContext else { return nil }
+        return currentUserMember(in: ownedGroupContext)
+    }
+
+    private var personalContext: WorkspaceContext? {
+        personalWorkspaceId.flatMap { workspaceContexts[$0] }
+            ?? workspaceContexts.values.first(where: { !$0.isShared })
+    }
+
+    private var ownedGroupContext: WorkspaceContext? {
+        ownedGroupWorkspaceId.flatMap { workspaceContexts[$0] }
+            ?? workspaceContexts.values.first { !$0.isShared && $0.id != personalWorkspaceId && !$0.members.isEmpty }
+    }
+
+    private func context(for dose: GeneratedDose) -> WorkspaceContext? {
+        if !dose.workspaceId.isEmpty, let context = workspaceContexts[dose.workspaceId] {
+            return context
+        }
+
+        if let workspaceId = medicationWorkspaceIds[dose.medicationId],
+           let context = workspaceContexts[workspaceId] {
+            return context
+        }
+
+        return personalContext
+    }
+
+    private func currentUserMember(in context: WorkspaceContext) -> CareMember? {
+        if let currentUserRecordName,
+           let member = context.members.first(where: { $0.userRecordName == currentUserRecordName }) {
+            return member
+        }
+
+        if context.id == personalWorkspaceId,
+           let activeMemberId,
+           let member = context.members.first(where: { $0.id == activeMemberId }) {
+            return member
+        }
+
+        return nil
+    }
+
+    private func currentMemberName(in context: WorkspaceContext) -> String {
+        currentUserMember(in: context)?.displayName ?? ""
+    }
+
+    private func otherMembers(in context: WorkspaceContext) -> [CareMember] {
+        let currentId = currentUserMember(in: context)?.id
+        return context.members.filter { $0.id != currentId }
+    }
+
+    private func ensureCurrentUserRecordName() async throws -> String {
+        if let currentUserRecordName {
+            return currentUserRecordName
+        }
+
+        let userRecordName = try await cloud.currentUserRecordName()
+        currentUserRecordName = userRecordName
+        return userRecordName
+    }
+
+    private func currentConfirmationMemberId(in context: WorkspaceContext? = nil) async throws -> UUID {
+        if let context,
+           !context.members.isEmpty,
+           let member = currentUserMember(in: context) {
+            return member.id
+        }
+
+        if let context, context.isShared {
+            throw StoreError.missingSharedMemberName
+        }
+
+        if context == nil, hasGroup, let member = currentOwnedGroupMember {
+            return member.id
+        }
+
+        let userRecordName = try await ensureCurrentUserRecordName()
+        return Self.memberId(forUserRecordName: userRecordName)
+    }
+
+    private func currentUserMemberForSaving(displayName: String, userRecordName: String) -> CareMember {
+        let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let memberId = currentOwnedGroupMember?.id ?? currentMemberIdForNewGroup(userRecordName: userRecordName)
+        let colorHex = currentOwnedGroupMember?.colorHex ?? Self.memberColors[members.count % Self.memberColors.count]
+        return CareMember(id: memberId, displayName: cleanName, colorHex: colorHex, userRecordName: userRecordName)
+    }
+
+    private func currentMemberIdForNewGroup(userRecordName: String) -> UUID {
+        if members.isEmpty,
+           confirmations.values.contains(where: { $0.memberId == Self.legacyPersonalConfirmationMemberId }) {
+            return Self.legacyPersonalConfirmationMemberId
+        }
+
+        return Self.memberId(forUserRecordName: userRecordName)
+    }
+
+    private static func memberId(forUserRecordName userRecordName: String) -> UUID {
+        let digest = SHA256.hash(data: Data(userRecordName.utf8))
+        var bytes = Array(digest.prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5],
+            bytes[6], bytes[7],
+            bytes[8], bytes[9],
+            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
     }
 
     private static func userMessage(for error: Error) -> String {
@@ -526,9 +1334,12 @@ final class MedicationStore: ObservableObject {
 
     private func saveStoredGroupReference(from snapshot: CloudSnapshot) {
         let reference = Self.storedGroupReference(from: snapshot)
+        Self.saveStoredGroupReference(reference, defaults: defaults)
+    }
 
+    private static func saveStoredGroupReference(_ reference: StoredGroupReference, defaults: UserDefaults) {
         if let data = try? JSONEncoder().encode(reference) {
-            defaults.set(data, forKey: Self.storedGroupReferenceKey)
+            defaults.set(data, forKey: storedGroupReferenceKey)
         }
     }
 
@@ -549,17 +1360,35 @@ final class MedicationStore: ObservableObject {
         return try? JSONDecoder().decode(StoredGroupReference.self, from: data)
     }
 
+    private var hiddenSharedWorkspaceIds: Set<String> {
+        guard let ids = defaults.array(forKey: Self.hiddenSharedWorkspaceIdsKey) as? [String] else {
+            return []
+        }
+
+        return Set(ids)
+    }
+
+    private func saveHiddenSharedWorkspaceIds(_ ids: Set<String>) {
+        defaults.set(Array(ids).sorted(), forKey: Self.hiddenSharedWorkspaceIdsKey)
+    }
+
     private static let memberColors = ["#2F80ED", "#27AE60", "#EB5757", "#9B51E0", "#F2994A", "#00A3A3"]
     static let storedGroupReferenceKey = "PillCareStoredGroupReference"
-    private static let personalConfirmationMemberId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    private static let hiddenSharedWorkspaceIdsKey = "PillCareHiddenSharedWorkspaceIds"
+    private static let legacyPersonalConfirmationMemberId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 }
 
 struct CloudSharingController: Identifiable {
-    var id: CKRecord.ID { groupRecord.recordID }
-    let cloud: CloudKitRepository
+    var id: CKRecord.ID { share.recordID }
+    let share: CKShare
     let groupRecord: CKRecord
     let database: CKDatabase
     let title: String
+}
+
+struct CloudSharePreparation {
+    var groupRecord: CKRecord
+    var share: CKShare
 }
 
 struct CloudSnapshot {
@@ -573,6 +1402,46 @@ struct CloudSnapshot {
 
     var isEmpty: Bool {
         members.isEmpty && medications.isEmpty && confirmations.isEmpty
+    }
+}
+
+private struct WorkspaceContext {
+    var id: String
+    var reference: StoredGroupReference
+    var source: WorkspaceSource
+    var groupRecord: CKRecord
+    var database: CKDatabase
+    var databaseScope: CKDatabase.Scope
+    var name: String
+    var members: [CareMember]
+    var medications: [Medication]
+    var confirmations: [DoseConfirmation]
+
+    var isShared: Bool {
+        databaseScope == .shared
+    }
+
+    init(snapshot: CloudSnapshot) {
+        let reference = StoredGroupReference(
+            recordName: snapshot.group.recordID.recordName,
+            zoneName: snapshot.group.recordID.zoneID.zoneName,
+            ownerName: snapshot.group.recordID.zoneID.ownerName,
+            databaseScope: snapshot.databaseScope.rawValue
+        )
+        self.reference = reference
+        id = reference.id
+        source = WorkspaceSource(
+            id: reference.id,
+            name: snapshot.name,
+            isShared: snapshot.databaseScope == .shared
+        )
+        groupRecord = snapshot.group
+        database = snapshot.database
+        databaseScope = snapshot.databaseScope
+        name = snapshot.name
+        members = snapshot.members
+        medications = snapshot.medications
+        confirmations = snapshot.confirmations
     }
 }
 
@@ -624,20 +1493,43 @@ struct StoredGroupReference: Codable, Equatable, Hashable {
 
 private enum StoreError: LocalizedError {
     case missingCloudWorkspace
+    case missingGroup
+    case missingSharedMemberName
+    case notPlanOwner
 
     var errorDescription: String? {
         switch self {
         case .missingCloudWorkspace:
             return "iCloud úložiště ještě není připravené. Chvíli počkej a zkus uložit znovu."
+        case .missingGroup:
+            return "Nejdřív vytvoř skupinu, potom můžeš plán sdílet."
+        case .missingSharedMemberName:
+            return "Nejdřív ve Skupině vyplň svoje jméno pro sdílenou skupinu."
+        case .notPlanOwner:
+            return "Sdílení a úpravy tohohle plánu může měnit jen vlastník plánu."
+        }
+    }
+}
+
+private enum CloudKitShareError: LocalizedError {
+    case invalidExistingShare
+    case missingRootRecord
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidExistingShare:
+            return "iCloud vrátil neplatný záznam sdílení. Zkus pozvánku otevřít znovu."
+        case .missingRootRecord:
+            return "iCloud pozvánka neobsahuje kořenový záznam sdílení. Požádej odesílatele o novou pozvánku."
         }
     }
 }
 
 @MainActor
 final class CloudKitRepository {
-    static let containerIdentifier = "iCloud.com.kolisko.pillcare"
-    static let defaultZoneName = "PillCareZone"
-    static let defaultPersonalWorkspaceRecordName = "personal-default-v1"
+    nonisolated static let containerIdentifier = "iCloud.com.kolisko.pillcare"
+    nonisolated static let defaultZoneName = "PillCareZone"
+    nonisolated static let defaultPersonalWorkspaceRecordName = "personal-default-v1"
 
     private let container: CKContainer
     private let zoneID: CKRecordZone.ID
@@ -673,6 +1565,20 @@ final class CloudKitRepository {
         }
     }
 
+    func currentUserRecordName() async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            container.fetchUserRecordID { recordID, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let recordID {
+                    continuation.resume(returning: recordID.recordName)
+                } else {
+                    continuation.resume(throwing: CKError(.unknownItem))
+                }
+            }
+        }
+    }
+
     func ensurePrivateZone() async throws {
         if try await privateZoneExists() {
             return
@@ -682,13 +1588,12 @@ final class CloudKitRepository {
         _ = try await modify(recordsToSave: [zone], recordIDsToDelete: [], in: privateDatabase)
     }
 
-    func createGroup(name: String, firstMemberName: String) async throws -> CloudSnapshot {
+    func createGroup(name: String, firstMember: CareMember) async throws -> CloudSnapshot {
         try await ensurePrivateZone()
 
         let group = CKRecord(recordType: RecordType.group, recordID: CKRecord.ID(recordName: "group-\(UUID().uuidString)", zoneID: zoneID))
         group[Field.name] = name as CKRecordValue
 
-        let firstMember = CareMember(displayName: firstMemberName, colorHex: "#2F80ED")
         let member = memberRecord(firstMember, groupRecord: group)
 
         let saved = try await modify(recordsToSave: [group, member], recordIDsToDelete: [], in: privateDatabase)
@@ -853,6 +1758,20 @@ final class CloudKitRepository {
         _ = try await modify(recordsToSave: [record], recordIDsToDelete: [], in: database)
     }
 
+    func fetchConfirmation(eventId: String, groupRecord: CKRecord, database: CKDatabase) async throws -> DoseConfirmation? {
+        let recordID = CKRecord.ID(recordName: confirmationRecordName(eventId: eventId), zoneID: groupRecord.recordID.zoneID)
+        do {
+            let record = try await fetchRecord(recordID: recordID, database: database)
+            return decodePayload(record, as: DoseConfirmation.self)
+        } catch {
+            if Self.isRecordMissing(error) {
+                return nil
+            }
+
+            throw error
+        }
+    }
+
     func deleteConfirmation(eventId: String, groupRecord: CKRecord, database: CKDatabase) async throws {
         let recordID = CKRecord.ID(recordName: confirmationRecordName(eventId: eventId), zoneID: groupRecord.recordID.zoneID)
         _ = try await modify(recordsToSave: [], recordIDsToDelete: [recordID], in: database)
@@ -875,15 +1794,35 @@ final class CloudKitRepository {
         _ = try await save(subscription: subscription, in: database)
     }
 
-    func prepareShare(groupRecord: CKRecord, database: CKDatabase, title: String) async throws -> CKShare {
+    func prepareShare(groupRecord: CKRecord, database: CKDatabase, title: String) async throws -> CloudSharePreparation {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let existingShareReference = groupRecord.share {
+            let existingShareRecord = try await fetchRecord(recordID: existingShareReference.recordID, database: database)
+            guard let existingShare = existingShareRecord as? CKShare else {
+                throw CloudKitShareError.invalidExistingShare
+            }
+            if !cleanTitle.isEmpty {
+                existingShare[CKShare.SystemFieldKey.title] = cleanTitle as CKRecordValue
+            }
+            existingShare.publicPermission = .none
+            let saved = try await modify(recordsToSave: [existingShare], recordIDsToDelete: [], in: database)
+            let savedShare = saved.compactMap { $0 as? CKShare }.first ?? existingShare
+            return CloudSharePreparation(groupRecord: groupRecord, share: savedShare)
+        }
+
         let share = CKShare(rootRecord: groupRecord)
-        share[CKShare.SystemFieldKey.title] = title as CKRecordValue
+        if !cleanTitle.isEmpty {
+            share[CKShare.SystemFieldKey.title] = cleanTitle as CKRecordValue
+        }
         share.publicPermission = .none
-        _ = try await modify(recordsToSave: [groupRecord, share], recordIDsToDelete: [], in: database)
-        return share
+        let saved = try await modify(recordsToSave: [groupRecord, share], recordIDsToDelete: [], in: database)
+        let savedGroup = saved.first(where: { $0.recordType == RecordType.group }) ?? groupRecord
+        let savedShare = saved.compactMap { $0 as? CKShare }.first ?? share
+        return CloudSharePreparation(groupRecord: savedGroup, share: savedShare)
     }
 
-    func acceptShare(_ metadata: CKShare.Metadata) async throws {
+    func acceptShare(_ metadata: CKShare.Metadata) async throws -> StoredGroupReference {
         _ = try await withCheckedThrowingContinuation { continuation in
             let operation = CKAcceptSharesOperation(shareMetadatas: [metadata])
             operation.acceptSharesResultBlock = { result in
@@ -897,6 +1836,16 @@ final class CloudKitRepository {
             configure(operation)
             container.add(operation)
         }
+
+        guard let rootID = metadata.hierarchicalRootRecordID else {
+            throw CloudKitShareError.missingRootRecord
+        }
+        return StoredGroupReference(
+            recordName: rootID.recordName,
+            zoneName: rootID.zoneID.zoneName,
+            ownerName: rootID.zoneID.ownerName,
+            databaseScope: CKDatabase.Scope.shared.rawValue
+        )
     }
 
     private func fetchGroupSnapshots(in database: CKDatabase, databaseScope: CKDatabase.Scope, zones: [CKRecordZone.ID]) async throws -> [CloudSnapshot] {
@@ -1289,7 +2238,7 @@ final class CloudKitRepository {
         }
     }
 
-    private func isCanonicalPersonalReference(_ reference: StoredGroupReference) -> Bool {
+    func isCanonicalPersonalReference(_ reference: StoredGroupReference) -> Bool {
         reference.databaseScope == CKDatabase.Scope.private.rawValue
             && reference.recordName == personalWorkspaceRecordName
             && reference.zoneName == zoneID.zoneName
@@ -1300,6 +2249,9 @@ final class CloudKitRepository {
         record[Field.uuid] = member.id.uuidString as CKRecordValue
         record[Field.displayName] = member.displayName as CKRecordValue
         record[Field.colorHex] = member.colorHex as CKRecordValue
+        if let userRecordName = member.userRecordName {
+            record[Field.userRecordName] = userRecordName as CKRecordValue
+        }
         record[Field.group] = CKRecord.Reference(recordID: groupRecord.recordID, action: .deleteSelf)
         return record
     }
@@ -1313,7 +2265,12 @@ final class CloudKitRepository {
         else {
             return nil
         }
-        return CareMember(id: id, displayName: displayName, colorHex: colorHex)
+        return CareMember(
+            id: id,
+            displayName: displayName,
+            colorHex: colorHex,
+            userRecordName: record[Field.userRecordName] as? String
+        )
     }
 
     private func decodePayload<T: Decodable>(_ record: CKRecord, as type: T.Type) -> T? {
@@ -1342,6 +2299,7 @@ private enum Field {
     static let uuid = "uuid"
     static let displayName = "displayName"
     static let colorHex = "colorHex"
+    static let userRecordName = "userRecordName"
     static let group = "group"
     static let payload = "payload"
     static let eventId = "eventId"

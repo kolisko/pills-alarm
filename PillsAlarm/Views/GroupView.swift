@@ -5,7 +5,8 @@ struct GroupView: View {
     @State private var groupName = ""
     @State private var firstMemberName = ""
     @State private var renamedGroupName = ""
-    @State private var newMemberName = ""
+    @State private var myMemberName = ""
+    @State private var sharedMemberNames: [String: String] = [:]
     @State private var sharingController: CloudSharingController?
 #if DEBUG && targetEnvironment(simulator)
     @StateObject private var diagnostics = CloudKitDiagnosticsModel()
@@ -34,7 +35,7 @@ struct GroupView: View {
                     createGroupSection
 
                 case .ready:
-                    if store.hasGroup {
+                    if store.hasGroup || !store.sharedWorkspaceProfiles.isEmpty {
                         realGroupSections
                     } else {
                         createGroupSection
@@ -53,6 +54,24 @@ struct GroupView: View {
             .task {
                 if renamedGroupName.isEmpty {
                     renamedGroupName = store.careGroupName
+                }
+                if myMemberName.isEmpty {
+                    myMemberName = store.currentMemberName
+                }
+            }
+            .onChange(of: store.careGroupName) { _, newValue in
+                if renamedGroupName.isEmpty || renamedGroupName != newValue {
+                    renamedGroupName = newValue
+                }
+            }
+            .onChange(of: store.currentMemberName) { _, newValue in
+                if myMemberName != newValue {
+                    myMemberName = newValue
+                }
+            }
+            .onChange(of: store.sharedWorkspaceProfiles) { _, profiles in
+                for profile in profiles where sharedMemberNames[profile.id] == nil {
+                    sharedMemberNames[profile.id] = profile.currentMemberName
                 }
             }
         }
@@ -76,56 +95,158 @@ struct GroupView: View {
 
     @ViewBuilder
     private var realGroupSections: some View {
-        Section("Skupina") {
-            TextField("Název skupiny", text: $renamedGroupName)
-                .onSubmit {
-                    Task { await store.setGroupName(renamedGroupName) }
+        if store.hasGroup {
+            Section {
+                TextField("Název skupiny", text: $renamedGroupName)
+
+                TextField("Moje jméno", text: $myMemberName)
+                    .textInputAutocapitalization(.words)
+
+                HStack {
+                    Spacer()
+                    Button("Uložit") {
+                        Task {
+                            await store.saveGroupSettings(name: renamedGroupName, myName: myMemberName)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSaveGroupSettings || store.isSyncing)
+                    Spacer()
+                }
+                .listRowBackground(Color.clear)
+            } header: {
+                Text("Skupina")
+            } footer: {
+                if store.currentMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Vyplň svoje jméno, aby bylo jasné, kdo potvrdil dávku.")
+                }
+            }
+        } else {
+            createGroupSection
+        }
+
+        if store.hasGroup {
+            Section("Ostatní členové") {
+                if otherMembers.isEmpty {
+                    Text("Zatím žádní další členové")
+                        .foregroundStyle(.secondary)
                 }
 
-            Picker("Moje jméno", selection: activeMemberBinding) {
-                ForEach(store.members) { member in
-                    Text(member.displayName).tag(Optional(member.id))
+                ForEach(otherMembers) { member in
+                    MemberRow(member: member)
+                }
+
+                Button {
+                    Task {
+                        if let controller = await store.prepareSharingController() {
+                            sharingController = controller
+                        }
+                    }
+                } label: {
+                    Label("Pozvat přes iCloud", systemImage: "person.badge.plus")
+                }
+                .disabled(store.isSyncing)
+            }
+
+            Section("Plány ve skupině") {
+                if store.sharedOwnPlanItems.isEmpty {
+                    Text("Zatím tu nejsou žádné tvoje sdílené plány")
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(store.sharedOwnPlanItems) { item in
+                    PlanSharingRow(item: item, actionTitle: "Odebrat") {
+                        Task {
+                            try? await store.setMedication(item, sharedWithOwnedGroup: false)
+                        }
+                    }
                 }
             }
 
-            Button {
-                if let controller = store.makeSharingController() {
-                    sharingController = controller
+            Section("Přidat plán do skupiny") {
+                if store.privateOwnPlanItems.isEmpty {
+                    Text("Nemáš žádné soukromé plány k přidání")
+                        .foregroundStyle(.secondary)
                 }
-            } label: {
-                Label("Pozvat přes iCloud", systemImage: "person.badge.plus")
+
+                ForEach(store.privateOwnPlanItems) { item in
+                    PlanSharingRow(item: item, actionTitle: "Přidat") {
+                        Task {
+                            try? await store.setMedication(item, sharedWithOwnedGroup: true)
+                        }
+                    }
+                }
             }
         }
 
-        Section("Členové") {
-            ForEach(store.members) { member in
-                MemberRow(member: member)
-            }
-            .onDelete { offsets in
-                for index in offsets {
-                    store.deleteMember(store.members[index])
+        ForEach(store.sharedWorkspaceProfiles) { profile in
+            Section {
+                if !profile.name.isEmpty {
+                    Text(profile.name)
+                        .foregroundStyle(.secondary)
+                }
+
+                TextField(
+                    "Moje jméno",
+                    text: Binding(
+                        get: { sharedMemberNames[profile.id] ?? profile.currentMemberName },
+                        set: { sharedMemberNames[profile.id] = $0 }
+                    )
+                )
+                .textInputAutocapitalization(.words)
+
+                HStack {
+                    Spacer()
+                    Button("Uložit") {
+                        Task {
+                            await store.saveSharedWorkspaceProfile(
+                                workspaceId: profile.id,
+                                myName: sharedMemberNames[profile.id] ?? profile.currentMemberName
+                            )
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled((sharedMemberNames[profile.id] ?? profile.currentMemberName).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isSyncing)
+                    Spacer()
+                }
+                .listRowBackground(Color.clear)
+            } header: {
+                Label("Sdílená skupina", systemImage: "person.2.fill")
+            } footer: {
+                if profile.currentMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Vyplň svoje jméno, aby bylo jasné, kdo potvrdil dávku ve sdílené skupině.")
                 }
             }
 
-            HStack {
-                TextField("mama, tata, babicka...", text: $newMemberName)
-                Button {
-                    store.addMember(named: newMemberName)
-                    newMemberName = ""
-                } label: {
-                    Image(systemName: "plus.circle.fill")
+            if !profile.otherMembers.isEmpty {
+                Section("Ostatní členové ve sdílení") {
+                    ForEach(profile.otherMembers) { member in
+                        MemberRow(member: member)
+                    }
                 }
-                .disabled(newMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    Task {
+                        await store.removeSharedWorkspace(workspaceId: profile.id)
+                    }
+                } label: {
+                    Label("Odebrat skupinu z aplikace", systemImage: "person.2.slash")
+                }
+                .disabled(store.isSyncing)
             }
         }
     }
 
-    private var activeMemberBinding: Binding<UUID?> {
-        Binding {
-            store.activeMemberId
-        } set: { value in
-            store.activeMemberId = value
-        }
+    private var canSaveGroupSettings: Bool {
+        !renamedGroupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !myMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var otherMembers: [CareMember] {
+        let currentMemberId = store.activeMember?.id
+        return store.members.filter { $0.id != currentMemberId }
     }
 
     @ViewBuilder
@@ -177,26 +298,39 @@ struct GroupView: View {
 }
 
 private struct MemberRow: View {
-    @EnvironmentObject private var store: MedicationStore
-    @State private var member: CareMember
-
-    init(member: CareMember) {
-        _member = State(initialValue: member)
-    }
+    var member: CareMember
 
     var body: some View {
         HStack {
             Circle()
                 .fill(Color(hex: member.colorHex))
                 .frame(width: 12, height: 12)
-            TextField("Jméno", text: $member.displayName)
-                .onSubmit {
-                    store.updateMember(member)
-                }
+            Text(member.displayName)
             Spacer()
-            if store.activeMemberId == member.id {
-                StatusBadge(text: "já", systemImage: "person.fill", tint: .teal)
+        }
+    }
+}
+
+private struct PlanSharingRow: View {
+    var item: MedicationListItem
+    var actionTitle: String
+    var action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.medication.name)
+                    .font(.subheadline.weight(.semibold))
+                Text("\(item.medication.phases.count) fáze")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+
+            Spacer()
+
+            Button(actionTitle, action: action)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
         }
     }
 }

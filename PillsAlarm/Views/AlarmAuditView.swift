@@ -17,6 +17,18 @@ struct SettingsView: View {
                     } label: {
                         Label("Nastavení alarmů", systemImage: "slider.horizontal.3")
                     }
+
+                    NavigationLink {
+                        SyncSettingsView()
+                    } label: {
+                        Label("Synchronizace", systemImage: "arrow.triangle.2.circlepath")
+                    }
+
+                    NavigationLink {
+                        VersionInfoView()
+                    } label: {
+                        Label("Verze", systemImage: "info.circle")
+                    }
                 }
             }
             .navigationTitle("Nastavení")
@@ -193,6 +205,39 @@ struct AlarmAuditView: View {
     }
 }
 
+private struct SyncSettingsView: View {
+    @AppStorage(SyncSettings.autoRefreshIntervalMinutesKey) private var autoRefreshIntervalMinutes = SyncSettings.defaultAutoRefreshIntervalMinutes
+
+    var body: some View {
+        List {
+            Section("Otevřená aplikace") {
+                Stepper(
+                    "Batch autorefresh: \(autoRefreshIntervalMinutes) min",
+                    value: autoRefreshIntervalBinding,
+                    in: SyncSettings.minimumAutoRefreshIntervalMinutes...SyncSettings.maximumAutoRefreshIntervalMinutes
+                )
+            }
+
+            Section {
+                Button {
+                    autoRefreshIntervalMinutes = SyncSettings.defaultAutoRefreshIntervalMinutes
+                } label: {
+                    Label("Obnovit výchozí nastavení", systemImage: "arrow.counterclockwise")
+                }
+            }
+        }
+        .navigationTitle("Synchronizace")
+    }
+
+    private var autoRefreshIntervalBinding: Binding<Int> {
+        Binding {
+            SyncSettings.normalizedAutoRefreshIntervalMinutes(autoRefreshIntervalMinutes)
+        } set: { value in
+            autoRefreshIntervalMinutes = SyncSettings.normalizedAutoRefreshIntervalMinutes(value)
+        }
+    }
+}
+
 private struct AlarmSettingsView: View {
     @EnvironmentObject private var store: MedicationStore
     @ObservedObject private var scheduler = NotificationScheduler.shared
@@ -280,4 +325,90 @@ private struct AuditRow: View {
                 .multilineTextAlignment(.trailing)
         }
     }
+}
+
+private struct VersionInfoView: View {
+    private let info = AppVersionInfo.current
+
+    var body: some View {
+        List {
+            Section("Aplikace") {
+                AuditRow(title: "Verze", value: info.version, systemImage: "app.badge", tint: .teal)
+                AuditRow(title: "Build", value: info.build, systemImage: "number", tint: .teal)
+                AuditRow(title: "Typ buildu", value: info.buildType, systemImage: "hammer.fill", tint: .secondary)
+                AuditRow(title: "Platforma", value: info.platform, systemImage: "iphone", tint: .secondary)
+            }
+
+            Section("iCloud") {
+                AuditRow(title: "CloudKit", value: info.cloudKitEnvironment, systemImage: "icloud.fill", tint: info.cloudKitTint)
+                AuditRow(title: "Push", value: info.pushEnvironment, systemImage: "bell.badge.fill", tint: .secondary)
+                AuditRow(title: "Container", value: info.iCloudContainers, systemImage: "externaldrive.connected.to.line.below.fill", tint: .secondary)
+            }
+
+            Section("Identifikace") {
+                AuditRow(title: "Bundle ID", value: info.bundleIdentifier, systemImage: "tag.fill", tint: .secondary)
+                AuditRow(title: "Služby", value: info.iCloudServices, systemImage: "checklist", tint: .secondary)
+            }
+        }
+        .navigationTitle("Verze")
+    }
+}
+
+private struct AppVersionInfo {
+    var version: String
+    var build: String
+    var buildType: String
+    var platform: String
+    var bundleIdentifier: String
+    var cloudKitEnvironment: String
+    var pushEnvironment: String
+    var iCloudContainers: String
+    var iCloudServices: String
+
+    var cloudKitTint: Color {
+        cloudKitEnvironment.localizedCaseInsensitiveContains("production") ? .green : .orange
+    }
+
+    static var current: AppVersionInfo {
+        let bundle = Bundle.main
+        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Neznámá"
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Neznámý"
+        let bundleIdentifier = bundle.bundleIdentifier ?? "Neznámé"
+        let cloudKitEnvironment = bundle.object(forInfoDictionaryKey: "PillCareCloudKitEnvironment") as? String
+            ?? "Neurčeno"
+        let pushEnvironment = bundle.object(forInfoDictionaryKey: "PillCareAPSEnvironment") as? String
+            ?? "Neurčeno"
+        let iCloudContainers = bundle.object(forInfoDictionaryKey: "PillCareICloudContainer") as? String
+            ?? "Neurčeno"
+        let iCloudServices = "CloudKit"
+
+        return AppVersionInfo(
+            version: version,
+            build: build,
+            buildType: buildType,
+            platform: platform,
+            bundleIdentifier: bundleIdentifier,
+            cloudKitEnvironment: cloudKitEnvironment,
+            pushEnvironment: pushEnvironment,
+            iCloudContainers: iCloudContainers,
+            iCloudServices: iCloudServices
+        )
+    }
+
+    private static var buildType: String {
+#if DEBUG
+        "Debug"
+#else
+        "Release"
+#endif
+    }
+
+    private static var platform: String {
+#if targetEnvironment(simulator)
+        "iOS simulátor"
+#else
+        "iOS zařízení"
+#endif
+    }
+
 }

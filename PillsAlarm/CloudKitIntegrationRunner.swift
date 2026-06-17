@@ -32,6 +32,7 @@ enum CloudKitIntegrationRunner {
     private static let planStoryArgument = "--run-cloudkit-plan-story"
     private static let planUpgradeCreateArgument = "--run-cloudkit-plan-upgrade-create"
     private static let planUpgradeVerifyArgument = "--run-cloudkit-plan-upgrade-verify"
+    private static let dumpStateArgument = "--dump-cloudkit-state"
 
     static var isRequested: Bool {
         requestedMode != nil
@@ -48,6 +49,8 @@ enum CloudKitIntegrationRunner {
             report = await runPlanUpgradeCreate { print($0) }
         case .planUpgradeVerify:
             report = await runPlanUpgradeVerify { print($0) }
+        case .dumpState:
+            report = await dumpState { print($0) }
         case nil:
             report = await run { print($0) }
         }
@@ -64,6 +67,9 @@ enum CloudKitIntegrationRunner {
         if CommandLine.arguments.contains(planUpgradeVerifyArgument) {
             return .planUpgradeVerify
         }
+        if CommandLine.arguments.contains(dumpStateArgument) {
+            return .dumpState
+        }
         if CommandLine.arguments.contains(launchArgument) {
             return .fullIntegration
         }
@@ -75,6 +81,53 @@ enum CloudKitIntegrationRunner {
         case planStory
         case planUpgradeCreate
         case planUpgradeVerify
+        case dumpState
+    }
+
+    static func dumpState(progress: @escaping (String) -> Void) async -> IntegrationReport {
+        var checks: [IntegrationCheck] = []
+        let startedAt = Date()
+        let cloud = CloudKitRepository()
+
+        func note(_ name: String, _ detail: String, status: String = "pass") {
+            checks.append(IntegrationCheck(name: name, status: status, detail: detail))
+            progress("\(status.uppercased()) \(name): \(detail)")
+        }
+
+        do {
+            let accountStatus = try await cloud.accountStatus()
+            note("icloud-account", "status=\(accountStatus.rawValue)")
+            guard accountStatus == .available else {
+                return IntegrationReport(runId: "dump-\(Int(startedAt.timeIntervalSince1970))", startedAt: startedAt, finishedAt: Date(), success: false, checks: checks)
+            }
+
+            try await cloud.ensurePrivateZone()
+            let snapshots = try await cloud.fetchAllGroupSnapshots()
+            note("workspace-count", "\(snapshots.count)")
+
+            for snapshot in snapshots {
+                let reference = StoredGroupReference(
+                    recordName: snapshot.group.recordID.recordName,
+                    zoneName: snapshot.group.recordID.zoneID.zoneName,
+                    ownerName: snapshot.group.recordID.zoneID.ownerName,
+                    databaseScope: snapshot.databaseScope.rawValue
+                )
+                let scope = snapshot.databaseScope == .shared ? "shared" : "private"
+                let workspaceName = snapshot.name.isEmpty ? "(personal)" : snapshot.name
+                let medicationSummary = snapshot.medications
+                    .map { "\($0.name)[\($0.id.uuidString)] sharedGroupId=\($0.sharedGroupId ?? "nil") owner=\($0.ownerUserRecordName ?? "nil")" }
+                    .joined(separator: " | ")
+                note(
+                    "workspace-\(reference.recordName)",
+                    "scope=\(scope) id=\(reference.id) name=\(workspaceName) members=\(snapshot.members.count) medications=\(snapshot.medications.count) confirmations=\(snapshot.confirmations.count) meds=\(medicationSummary)"
+                )
+            }
+
+            return IntegrationReport(runId: "dump-\(Int(startedAt.timeIntervalSince1970))", startedAt: startedAt, finishedAt: Date(), success: true, checks: checks)
+        } catch {
+            note("dump-error", error.localizedDescription, status: "fail")
+            return IntegrationReport(runId: "dump-\(Int(startedAt.timeIntervalSince1970))", startedAt: startedAt, finishedAt: Date(), success: false, checks: checks)
+        }
     }
 
     static func run(progress: @escaping (String) -> Void) async -> IntegrationReport {
@@ -230,7 +283,8 @@ enum CloudKitIntegrationRunner {
 
             let groupName = "Integration \(runId)"
             let firstMemberName = "Tata \(runId)"
-            let snapshot = try await cloud.createGroup(name: groupName, firstMemberName: firstMemberName)
+            let firstMember = CareMember(displayName: firstMemberName, colorHex: "#2F80ED", userRecordName: "debug-user-\(runId)")
+            let snapshot = try await cloud.createGroup(name: groupName, firstMember: firstMember)
             guard snapshot.name == groupName, snapshot.members.contains(where: { $0.displayName == firstMemberName }) else {
                 fail("create-group", "Created snapshot did not contain expected group/member.")
                 return IntegrationReport(runId: runId, startedAt: startedAt, finishedAt: Date(), success: false, checks: checks)
@@ -272,21 +326,21 @@ enum CloudKitIntegrationRunner {
 
             let todayDoses = ScheduleEngine.doses(on: medication.startDate, medications: [medication])
             guard todayDoses.count == 2,
-                  todayDoses.contains(where: { $0.scheduledTime.hour == 7 && $0.amount == "1/4" }),
-                  todayDoses.contains(where: { $0.scheduledTime.hour == 19 && $0.amount == "1/4" }) else {
-                fail("schedule-phase-1", "Expected 1/4 - 0 - 1/4 on day 1, got \(todayDoses.map(\.amount).joined(separator: ", ")).")
+                  todayDoses.contains(where: { $0.scheduledTime.hour == 7 && $0.amount == "¼" }),
+                  todayDoses.contains(where: { $0.scheduledTime.hour == 19 && $0.amount == "¼" }) else {
+                fail("schedule-phase-1", "Expected ¼ - 0 - ¼ on day 1, got \(todayDoses.map(\.amount).joined(separator: ", ")).")
                 return IntegrationReport(runId: runId, startedAt: startedAt, finishedAt: Date(), success: false, checks: checks)
             }
-            pass("schedule-phase-1", "Generated day 1 doses 1/4 - 0 - 1/4.")
+            pass("schedule-phase-1", "Generated day 1 doses ¼ - 0 - ¼.")
 
             let dayFour = Calendar.current.date(byAdding: .day, value: 3, to: medication.startDate) ?? medication.startDate
             let dayFourDoses = ScheduleEngine.doses(on: dayFour, medications: [medication])
-            guard dayFourDoses.contains(where: { $0.scheduledTime.hour == 7 && $0.amount == "1/4" }),
-                  dayFourDoses.contains(where: { $0.scheduledTime.hour == 19 && $0.amount == "1/2" }) else {
-                fail("schedule-phase-2", "Expected 1/4 - 0 - 1/2 after phase change, got \(dayFourDoses.map(\.amount).joined(separator: ", ")).")
+            guard dayFourDoses.contains(where: { $0.scheduledTime.hour == 7 && $0.amount == "¼" }),
+                  dayFourDoses.contains(where: { $0.scheduledTime.hour == 19 && $0.amount == "½" }) else {
+                fail("schedule-phase-2", "Expected ¼ - 0 - ½ after phase change, got \(dayFourDoses.map(\.amount).joined(separator: ", ")).")
                 return IntegrationReport(runId: runId, startedAt: startedAt, finishedAt: Date(), success: false, checks: checks)
             }
-            pass("schedule-phase-2", "Generated phase change doses 1/4 - 0 - 1/2.")
+            pass("schedule-phase-2", "Generated phase change doses ¼ - 0 - ½.")
 
             guard let dose = todayDoses.first else {
                 fail("dose-selection", "No generated dose available for confirmation.")
@@ -314,7 +368,8 @@ enum CloudKitIntegrationRunner {
             }
             pass("save-confirmation", "Fetched \(confirmationSnapshot.confirmations.count) confirmation(s).")
 
-            let share = try await cloud.prepareShare(groupRecord: snapshot.group, database: snapshot.database, title: groupName)
+            let preparedShare = try await cloud.prepareShare(groupRecord: snapshot.group, database: snapshot.database, title: groupName)
+            let share = preparedShare.share
             guard share.recordID.zoneID == snapshot.group.recordID.zoneID else {
                 fail("prepare-share", "Share was created in an unexpected CloudKit zone.")
                 return IntegrationReport(runId: runId, startedAt: startedAt, finishedAt: Date(), success: false, checks: checks)

@@ -17,14 +17,6 @@ struct TodayView: View {
             List {
                 Section {
                     DatePicker("Den", selection: $selectedDate, displayedComponents: .date)
-
-                    if store.hasGroup {
-                        Picker("Potvrzuje", selection: activeMemberBinding) {
-                            ForEach(store.members) { member in
-                                Text(member.displayName).tag(Optional(member.id))
-                            }
-                        }
-                    }
                 }
 
                 if !isShowingToday {
@@ -64,13 +56,6 @@ struct TodayView: View {
         }
     }
 
-    private var activeMemberBinding: Binding<UUID?> {
-        Binding {
-            store.activeMemberId
-        } set: { value in
-            store.activeMemberId = value
-        }
-    }
 }
 
 private struct DoseRow: View {
@@ -109,8 +94,16 @@ private struct DoseRow: View {
                 .frame(width: 72, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(dose.medicationName)
-                        .font(.headline)
+                    HStack(spacing: 6) {
+                        if dose.isShared {
+                            Image(systemName: "person.2.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.teal)
+                                .accessibilityLabel("Sdílená dávka")
+                        }
+                        Text(dose.medicationName)
+                            .font(.headline)
+                    }
                     Text("Dávka \(dose.amount) · \(dose.phaseTitle)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -126,9 +119,10 @@ private struct DoseRow: View {
 
             if let confirmation {
                 HStack {
-                    let statusText = store.hasGroup
-                        ? (confirmation.status == .confirmed ? "Podáno: \(confirmation.memberName)" : "Přeskočil/a: \(confirmation.memberName)")
-                        : confirmation.status.label
+                    let memberName = store.displayName(for: confirmation)
+                    let statusText = memberName.map {
+                        confirmation.status == .confirmed ? "Podáno: \($0)" : "Přeskočil/a: \($0)"
+                    } ?? confirmation.status.label
                     StatusBadge(
                         text: statusText,
                         systemImage: confirmation.status == .confirmed ? "checkmark.circle.fill" : "forward.circle.fill",
@@ -143,29 +137,35 @@ private struct DoseRow: View {
                             try? await store.undoConfirmation(for: dose)
                         }
                     }
-                    .font(.caption.weight(.semibold))
+                    .buttonStyle(DoseActionButtonStyle(kind: .undo))
                     .disabled(store.isSyncing)
                 }
             } else {
-                HStack {
-                    Button {
-                        Task {
-                            try? await store.confirm(dose, status: .confirmed)
+                if !store.canRecordDose(dose) {
+                    Label("Nejdřív vyplň svoje jméno ve Skupině.", systemImage: "person.crop.circle.badge.exclamationmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                } else {
+                    HStack {
+                        Button {
+                            Task {
+                                try? await store.confirm(dose, status: .confirmed)
+                            }
+                        } label: {
+                            Label("Podat", systemImage: "checkmark.circle.fill")
                         }
-                    } label: {
-                        Label("Podáno", systemImage: "checkmark.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled((store.hasGroup && store.activeMember == nil) || store.isSyncing)
+                        .buttonStyle(DoseActionButtonStyle(kind: .primary))
+                        .disabled(store.isSyncing)
 
-                    Button {
-                        showsSkipConfirmation = true
-                    } label: {
-                        Label("Přeskočit", systemImage: "forward.circle")
+                        Button {
+                            showsSkipConfirmation = true
+                        } label: {
+                            Label("Přeskočit", systemImage: "forward.circle")
+                        }
+                        .buttonStyle(DoseActionButtonStyle(kind: .secondary))
+                        .controlSize(.small)
+                        .disabled(store.isSyncing)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled((store.hasGroup && store.activeMember == nil) || store.isSyncing)
                 }
             }
         }
@@ -188,6 +188,112 @@ private struct DoseRow: View {
                 }
             }
             Button("Zrušit", role: .cancel) {}
+        }
+    }
+}
+
+private struct DoseActionButtonStyle: ButtonStyle {
+    enum Kind {
+        case primary
+        case secondary
+        case undo
+    }
+
+    @Environment(\.isEnabled) private var isEnabled
+    var kind: Kind
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(font)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .foregroundStyle(foregroundColor)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .frame(minHeight: minimumHeight)
+            .background(backgroundShape(configuration: configuration))
+            .overlay(borderShape)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.78 : 1) : 0.42)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+
+    private var font: Font {
+        switch kind {
+        case .primary:
+            return .subheadline.weight(.semibold)
+        case .secondary, .undo:
+            return .caption.weight(.semibold)
+        }
+    }
+
+    private var foregroundColor: Color {
+        switch kind {
+        case .primary:
+            return .white
+        case .secondary:
+            return .secondary
+        case .undo:
+            return .teal
+        }
+    }
+
+    private var horizontalPadding: CGFloat {
+        switch kind {
+        case .primary:
+            return 14
+        case .secondary, .undo:
+            return 10
+        }
+    }
+
+    private var verticalPadding: CGFloat {
+        switch kind {
+        case .primary:
+            return 8
+        case .secondary, .undo:
+            return 6
+        }
+    }
+
+    private var minimumHeight: CGFloat {
+        switch kind {
+        case .primary:
+            return 36
+        case .secondary, .undo:
+            return 30
+        }
+    }
+
+    @ViewBuilder
+    private func backgroundShape(configuration: Configuration) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(backgroundColor)
+    }
+
+    @ViewBuilder
+    private var borderShape: some View {
+        switch kind {
+        case .primary:
+            EmptyView()
+        case .secondary:
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+        case .undo:
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.teal.opacity(0.25), lineWidth: 1)
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch kind {
+        case .primary:
+            return .teal
+        case .secondary:
+            return Color.secondary.opacity(0.08)
+        case .undo:
+            return Color.teal.opacity(0.09)
         }
     }
 }

@@ -13,7 +13,14 @@ enum ScheduleEngine {
         }
     }
 
-    static func doses(on date: Date, medication: Medication, calendar: Calendar = .current) -> [GeneratedDose] {
+    static func doses(
+        on date: Date,
+        medication: Medication,
+        workspaceId: String = "",
+        isShared: Bool = false,
+        workspaceName: String = "",
+        calendar: Calendar = .current
+    ) -> [GeneratedDose] {
         guard let phase = phase(for: date, medication: medication, calendar: calendar) else {
             return []
         }
@@ -23,8 +30,8 @@ enum ScheduleEngine {
                 return nil
             }
 
-            let amount = entry.amount.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !amount.isEmpty, amount != "0" else {
+            let amount = DoseAmountFormatter.normalized(entry.amount)
+            guard amount > 0 else {
                 return nil
             }
 
@@ -34,9 +41,15 @@ enum ScheduleEngine {
                 second: 0,
                 of: date
             ) ?? date
+            let baseEventId = eventId(medicationId: medication.id, timeId: doseTime.id, scheduledDate: scheduledDate, calendar: calendar)
+            let eventId = workspaceId.isEmpty ? baseEventId : "\(workspaceId)|\(baseEventId)"
 
             return GeneratedDose(
-                id: eventId(medicationId: medication.id, timeId: doseTime.id, scheduledDate: scheduledDate, calendar: calendar),
+                id: eventId,
+                baseEventId: baseEventId,
+                workspaceId: workspaceId,
+                isShared: isShared,
+                workspaceName: workspaceName,
                 medicationId: medication.id,
                 medicationName: medication.name,
                 medicationNote: medication.note,
@@ -45,7 +58,7 @@ enum ScheduleEngine {
                 timeLabel: doseTime.label,
                 scheduledDate: scheduledDate,
                 scheduledTime: doseTime.time,
-                amount: amount,
+                amount: DoseAmountFormatter.displayText(for: amount),
                 phaseTitle: phase.title
             )
         }

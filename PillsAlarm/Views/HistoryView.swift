@@ -3,8 +3,8 @@ import SwiftUI
 struct HistoryView: View {
     @EnvironmentObject private var store: MedicationStore
 
-    private var confirmations: [DoseConfirmation] {
-        store.confirmations.values.sorted { $0.timestamp > $1.timestamp }
+    private var confirmations: [ConfirmationListItem] {
+        store.confirmationItems
     }
 
     var body: some View {
@@ -14,7 +14,8 @@ struct HistoryView: View {
                     EmptyStateView(title: "Zatím žádná historie", systemImage: "clock")
                         .listRowBackground(Color.clear)
                 } else {
-                    ForEach(confirmations) { confirmation in
+                    ForEach(confirmations) { item in
+                        let confirmation = item.confirmation
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
                                 StatusBadge(
@@ -27,8 +28,16 @@ struct HistoryView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            Text(summary(for: confirmation))
-                                .font(.headline)
+                            HStack(spacing: 6) {
+                                if item.source.isShared {
+                                    Image(systemName: "person.2.fill")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.teal)
+                                        .accessibilityLabel("Sdílený záznam")
+                                }
+                                Text(summary(for: confirmation, memberName: store.displayName(for: confirmation)))
+                                    .font(.headline)
+                            }
                             Text("Plánováno \(confirmation.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -44,11 +53,11 @@ struct HistoryView: View {
         }
     }
 
-    private func summary(for confirmation: DoseConfirmation) -> String {
-        if confirmation.memberName.isEmpty {
+    private func summary(for confirmation: DoseConfirmation, memberName: String?) -> String {
+        guard let memberName else {
             return confirmation.amount
         }
 
-        return "\(confirmation.amount) potvrdil/a \(confirmation.memberName)"
+        return "\(confirmation.amount) potvrdil/a \(memberName)"
     }
 }
