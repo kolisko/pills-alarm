@@ -196,6 +196,7 @@ final class MedicationStore: ObservableObject {
             guard generation == loadGeneration else { return }
 
             loadState = .ready
+            syncErrorMessage = nil
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
         } catch {
             fail(error)
@@ -703,10 +704,6 @@ final class MedicationStore: ObservableObject {
     static func acceptShare(_ metadata: CKShare.Metadata) async throws {
         let reference = try await CloudKitRepository().acceptShare(metadata)
         saveStoredGroupReference(reference, defaults: .standard)
-    }
-
-    func dismissSyncError() {
-        syncErrorMessage = nil
     }
 
     func selectWorkspace(_ candidate: WorkspaceCandidate) async {

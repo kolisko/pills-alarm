@@ -1,4 +1,25 @@
+import Network
 import SwiftUI
+
+final class NetworkStatusMonitor: ObservableObject, @unchecked Sendable {
+    @Published private(set) var isConnected = true
+
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "PillCareNetworkStatusMonitor")
+
+    init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                self?.isConnected = path.status == .satisfied
+            }
+        }
+        monitor.start(queue: queue)
+    }
+
+    deinit {
+        monitor.cancel()
+    }
+}
 
 @MainActor
 final class CloudSyncCoordinator: ObservableObject {
@@ -91,6 +112,7 @@ struct PillsAlarmApp: App {
     @AppStorage(SyncSettings.autoRefreshIntervalMinutesKey) private var autoRefreshIntervalMinutes = SyncSettings.defaultAutoRefreshIntervalMinutes
     @StateObject private var store = MedicationStore()
     @StateObject private var cloudSync = CloudSyncCoordinator()
+    @StateObject private var networkStatus = NetworkStatusMonitor()
 
     var body: some Scene {
         WindowGroup {
@@ -129,6 +151,10 @@ struct PillsAlarmApp: App {
                 .onChange(of: autoRefreshIntervalMinutes) {
                     guard scenePhase == .active else { return }
                     cloudSync.startPeriodicReload(store: store, intervalMinutes: autoRefreshIntervalMinutes)
+                }
+                .onChange(of: networkStatus.isConnected) { _, isConnected in
+                    guard isConnected, scenePhase == .active else { return }
+                    cloudSync.scheduleReload(store: store, delayNanoseconds: 250_000_000, showSyncIndicator: false)
                 }
         }
     }

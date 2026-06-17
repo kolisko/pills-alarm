@@ -86,14 +86,6 @@ private struct SyncOverlay: View {
                     Text(message)
                         .font(.caption.weight(.semibold))
                         .fixedSize(horizontal: false, vertical: true)
-                    Button {
-                        store.dismissSyncError()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.caption.weight(.bold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
