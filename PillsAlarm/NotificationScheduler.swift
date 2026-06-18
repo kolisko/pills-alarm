@@ -22,6 +22,7 @@ final class NotificationScheduler: ObservableObject {
     static let doseAlarmSoundName = "DoseAlarm.wav"
     static let doseAlarmDurationSeconds = 30
     private static let scheduleHorizonDays = 7
+    private static let scheduleLookbackDays = 1
     private static let alarmSettingsKey = "alarmSettings.v1"
 
     private init() {
@@ -96,21 +97,31 @@ final class NotificationScheduler: ObservableObject {
         let calendar = Calendar.current
         let now = Date()
         let settings = alarmSettings
-        var futureDoses: [GeneratedDose] = []
+        let repeatOffsets = settings.repeatOffsetsMinutes
+        var schedulableDoses: [GeneratedDose] = []
 
-        for dayOffset in 0..<Self.scheduleHorizonDays {
+        for dayOffset in -Self.scheduleLookbackDays..<Self.scheduleHorizonDays {
             guard let date = calendar.date(byAdding: .day, value: dayOffset, to: now) else { continue }
             let doses = store.doses(on: date)
-            for dose in doses where dose.scheduledDate > now && store.confirmation(for: dose) == nil {
-                futureDoses.append(dose)
+            for dose in doses where store.confirmation(for: dose) == nil {
+                let hasFutureAlarm = repeatOffsets.contains { offset in
+                    guard let scheduledDate = calendar.date(byAdding: .minute, value: offset, to: dose.scheduledDate) else {
+                        return false
+                    }
+
+                    return scheduledDate > now
+                }
+
+                if hasFutureAlarm {
+                    schedulableDoses.append(dose)
+                }
             }
         }
 
-        futureDoses.sort { $0.scheduledDate < $1.scheduledDate }
-        let repeatingDoseIds = Set(futureDoses.prefix(settings.repeatingDoseLimit).map(\.id))
-        let repeatOffsets = settings.repeatOffsetsMinutes
+        schedulableDoses.sort { $0.scheduledDate < $1.scheduledDate }
+        let repeatingDoseIds = Set(schedulableDoses.prefix(settings.repeatingDoseLimit).map(\.id))
 
-        return futureDoses.flatMap { dose in
+        return schedulableDoses.flatMap { dose in
             let offsets = repeatingDoseIds.contains(dose.id) ? repeatOffsets : [0]
             return offsets.enumerated().compactMap { index, offset -> UNNotificationRequest? in
                 guard let scheduledDate = calendar.date(byAdding: .minute, value: offset, to: dose.scheduledDate),
