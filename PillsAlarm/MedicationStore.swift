@@ -187,6 +187,9 @@ final class MedicationStore: ObservableObject {
 
             guard generation == loadGeneration else { return }
 
+            try await cloud.repairShareHierarchy(for: resolvedSnapshots)
+            guard generation == loadGeneration else { return }
+
             apply(snapshots: resolvedSnapshots)
 
             for context in workspaceContexts.values {
@@ -1799,6 +1802,7 @@ final class CloudKitRepository {
         let record = CKRecord(recordType: RecordType.medication, recordID: CKRecord.ID(recordName: recordName(prefix: "medication", id: medication.id), zoneID: groupRecord.recordID.zoneID))
         record[Field.uuid] = medication.id.uuidString as CKRecordValue
         record[Field.group] = CKRecord.Reference(recordID: groupRecord.recordID, action: .deleteSelf)
+        record.setParent(groupRecord)
         record[Field.payload] = try JSONEncoder.cloud.encode(medication) as NSData
         _ = try await modify(recordsToSave: [record], recordIDsToDelete: [], in: database)
     }
@@ -1813,6 +1817,7 @@ final class CloudKitRepository {
         record[Field.eventId] = confirmation.eventId as CKRecordValue
         record[Field.medicationId] = confirmation.medicationId.uuidString as CKRecordValue
         record[Field.group] = CKRecord.Reference(recordID: groupRecord.recordID, action: .deleteSelf)
+        record.setParent(groupRecord)
         record[Field.payload] = try JSONEncoder.cloud.encode(confirmation) as NSData
         _ = try await modify(recordsToSave: [record], recordIDsToDelete: [], in: database)
     }
@@ -1853,8 +1858,26 @@ final class CloudKitRepository {
         _ = try await save(subscription: subscription, in: database)
     }
 
+    func repairShareHierarchy(for snapshots: [CloudSnapshot]) async throws {
+        for snapshot in snapshots where snapshot.databaseScope == .private && snapshot.group.share != nil {
+            let linkedRecords = try await fetchLinkedRecords(group: snapshot.group, database: snapshot.database)
+            let recordsToRepair = linkedRecords.filter { $0.parent?.recordID != snapshot.group.recordID }
+            for record in recordsToRepair {
+                record.setParent(snapshot.group)
+            }
+
+            if !recordsToRepair.isEmpty {
+                _ = try await modify(recordsToSave: recordsToRepair, recordIDsToDelete: [], in: snapshot.database)
+            }
+        }
+    }
+
     func prepareShare(groupRecord: CKRecord, database: CKDatabase, title: String) async throws -> CloudSharePreparation {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let linkedRecords = try await fetchLinkedRecords(group: groupRecord, database: database)
+        for record in linkedRecords where record.parent?.recordID != groupRecord.recordID {
+            record.setParent(groupRecord)
+        }
 
         if let existingShareReference = groupRecord.share {
             let existingShareRecord = try await fetchRecord(recordID: existingShareReference.recordID, database: database)
@@ -1865,7 +1888,7 @@ final class CloudKitRepository {
                 existingShare[CKShare.SystemFieldKey.title] = cleanTitle as CKRecordValue
             }
             existingShare.publicPermission = .none
-            let saved = try await modify(recordsToSave: [existingShare], recordIDsToDelete: [], in: database)
+            let saved = try await modify(recordsToSave: [existingShare] + linkedRecords, recordIDsToDelete: [], in: database)
             let savedShare = saved.compactMap { $0 as? CKShare }.first ?? existingShare
             return CloudSharePreparation(groupRecord: groupRecord, share: savedShare)
         }
@@ -1875,7 +1898,7 @@ final class CloudKitRepository {
             share[CKShare.SystemFieldKey.title] = cleanTitle as CKRecordValue
         }
         share.publicPermission = .none
-        let saved = try await modify(recordsToSave: [groupRecord, share], recordIDsToDelete: [], in: database)
+        let saved = try await modify(recordsToSave: [groupRecord, share] + linkedRecords, recordIDsToDelete: [], in: database)
         let savedGroup = saved.first(where: { $0.recordType == RecordType.group }) ?? groupRecord
         let savedShare = saved.compactMap { $0 as? CKShare }.first ?? share
         return CloudSharePreparation(groupRecord: savedGroup, share: savedShare)
@@ -2312,6 +2335,7 @@ final class CloudKitRepository {
             record[Field.userRecordName] = userRecordName as CKRecordValue
         }
         record[Field.group] = CKRecord.Reference(recordID: groupRecord.recordID, action: .deleteSelf)
+        record.setParent(groupRecord)
         return record
     }
 
