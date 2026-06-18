@@ -484,22 +484,29 @@ private struct PillPortionIcon: View {
         GeometryReader { proxy in
             let diameter = min(proxy.size.width, proxy.size.height)
             let normalizedFraction = min(max(fraction, 0), 1)
+            let strokeWidth = max(diameter * 0.1, 2)
 
             ZStack {
                 if normalizedFraction > 0 {
                     if normalizedFraction >= 1 {
                         Circle()
-                            .fill(color.opacity(0.95))
+                            .stroke(
+                                color.opacity(0.95),
+                                style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
+                            )
                     } else {
                         CircleSegmentShape(fraction: normalizedFraction)
-                            .fill(color.opacity(0.95))
+                            .stroke(
+                                color.opacity(0.95),
+                                style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
+                            )
                     }
                 }
             }
             .frame(width: diameter, height: diameter)
             .frame(width: proxy.size.width, height: proxy.size.height)
             .compositingGroup()
-            .shadow(color: color.opacity(normalizedFraction > 0 ? 0.18 : 0), radius: diameter / 10, y: 1)
+            .shadow(color: color.opacity(normalizedFraction > 0 ? 0.08 : 0), radius: diameter / 12, y: 1)
         }
     }
 }
@@ -571,7 +578,7 @@ private struct StackedPillIcon: View {
                 .overlay {
                     Text("\(count)×")
                         .font(.caption.weight(.black).monospacedDigit())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(color)
                         .minimumScaleFactor(0.7)
                 }
         }
