@@ -1,12 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct TodayView: View {
     @EnvironmentObject private var store: MedicationStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedDate = Date()
-
-    private var doses: [GeneratedDose] {
-        store.doses(on: selectedDate)
-    }
+    @State private var pageOffset = 0
+    @State private var midnightWatcherID = UUID()
 
     private var isShowingToday: Bool {
         selectedDate.isSameDay(as: Date())
@@ -14,48 +14,158 @@ struct TodayView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    DatePicker("Den", selection: $selectedDate, displayedComponents: .date)
-                }
-
-                if !isShowingToday {
-                    Section {
-                        HStack(spacing: 12) {
-                            Label(selectedDate.relativeDayLabel(), systemImage: "calendar")
-                                .font(.headline)
-                            Spacer()
-                            Button {
-                                selectedDate = Date()
-                            } label: {
-                                Label("Dnes", systemImage: "arrow.uturn.backward")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    } footer: {
-                        Text("Zobrazuješ jiné datum.")
-                    }
-                }
-
-                if doses.isEmpty {
-                    EmptyStateView(title: "Na tento den nejsou naplánované dávky", systemImage: "pills")
-                        .listRowBackground(Color.clear)
-                } else {
-                    Section(selectedDate.relativeDayLabel()) {
-                        ForEach(doses) { dose in
-                            DoseRow(dose: dose)
-                        }
-                    }
-                }
+            AppScreen(
+                title: selectedDate.relativeDayLabel(),
+                titleColor: isShowingToday ? .primary : .teal
+            ) {
+                todayHeaderTrailing
+            } content: {
+                dayPager
             }
-            .navigationTitle(selectedDate.relativeDayLabel())
-            .refreshable {
-                await store.reload(showSyncIndicator: false)
+            .onAppear {
+                syncToActualToday()
+                restartMidnightWatcher()
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+                syncToActualToday()
+                restartMidnightWatcher()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+                syncToActualToday()
+                restartMidnightWatcher()
+            }
+            .task(id: midnightWatcherID) {
+                await waitForNextMidnight()
             }
         }
     }
 
+    private var todayHeaderTrailing: some View {
+        HStack(spacing: 8) {
+            if !isShowingToday {
+                Button {
+                    syncToActualToday()
+                } label: {
+                    Label {
+                        Text("Dnes")
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    } icon: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+            }
+
+            DatePicker("", selection: selectedDateBinding, displayedComponents: .date)
+                .labelsHidden()
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var dayPager: some View {
+        TabView(selection: $pageOffset) {
+            ForEach([-1, 0, 1], id: \.self) { offset in
+                TodayDoseList(
+                    date: date(forPageOffset: offset)
+                )
+                    .tag(offset)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: pageOffset) { _, newOffset in
+            moveSelectedDate(by: newOffset)
+        }
+    }
+
+    private var selectedDateBinding: Binding<Date> {
+        Binding {
+            selectedDate
+        } set: { date in
+            setSelectedDate(date)
+        }
+    }
+
+    private func date(forPageOffset offset: Int) -> Date {
+        Calendar.current.date(byAdding: .day, value: offset, to: selectedDate) ?? selectedDate
+    }
+
+    private func setSelectedDate(_ date: Date) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            selectedDate = date
+            pageOffset = 0
+        }
+    }
+
+    private func moveSelectedDate(by offset: Int) {
+        guard offset != 0 else { return }
+        setSelectedDate(date(forPageOffset: offset))
+    }
+
+    private func syncToActualToday() {
+        setSelectedDate(Date())
+    }
+
+    private func restartMidnightWatcher() {
+        midnightWatcherID = UUID()
+    }
+
+    private func waitForNextMidnight() async {
+        let now = Date()
+        let nextMidnight = Calendar.current.nextDate(
+            after: now,
+            matching: DateComponents(hour: 0, minute: 0, second: 0),
+            matchingPolicy: .nextTime
+        ) ?? Calendar.current.date(
+            byAdding: .day,
+            value: 1,
+            to: Calendar.current.startOfDay(for: now)
+        ) ?? now.addingTimeInterval(24 * 60 * 60)
+        let delaySeconds = max(nextMidnight.timeIntervalSince(now), 1)
+
+        do {
+            try await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+        } catch {
+            return
+        }
+
+        guard !Task.isCancelled else { return }
+        await MainActor.run {
+            syncToActualToday()
+            restartMidnightWatcher()
+        }
+    }
+}
+
+private struct TodayDoseList: View {
+    @EnvironmentObject private var store: MedicationStore
+    var date: Date
+
+    private var doses: [GeneratedDose] {
+        store.doses(on: date)
+    }
+
+    var body: some View {
+        List {
+            if doses.isEmpty {
+                EmptyStateView(title: "Na tento den nejsou naplánované dávky", systemImage: "pills")
+                    .listRowBackground(Color.clear)
+            } else {
+                ForEach(doses) { dose in
+                    DoseRow(dose: dose)
+                }
+            }
+        }
+        .refreshable {
+            await store.reload(showSyncIndicator: false)
+        }
+    }
 }
 
 private struct DoseRow: View {
@@ -75,49 +185,43 @@ private struct DoseRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if isOverdueToday {
-                StatusBadge(
-                    text: "Je čas vzít dávku",
-                    systemImage: "exclamationmark.circle.fill",
-                    tint: .orange
-                )
-            }
-
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(dose.timeLabel)
                         .font(.headline)
                     Text(dose.scheduledTime.label)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isOverdueToday ? .red : .secondary)
                 }
                 .frame(width: 72, alignment: .leading)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        if dose.isShared {
-                            Image(systemName: "person.2.fill")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.teal)
-                                .accessibilityLabel("Sdílená dávka")
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            if dose.isShared {
+                                Image(systemName: "person.2.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.teal)
+                                    .accessibilityLabel("Sdílená dávka")
+                            }
+                            Text(dose.medicationName)
+                                .font(.headline)
                         }
-                        Text(dose.medicationName)
-                            .font(.headline)
-                    }
-                    HStack(spacing: 8) {
-                        PillAmountVisualization(amount: DoseAmountFormatter.value(from: dose.amount))
-                            .accessibilityLabel("Dávka \(dose.amount)")
                         Text(dose.phaseTitle)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
-                    if !dose.medicationNote.isEmpty {
-                        Text(dose.medicationNote)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if !dose.medicationNote.isEmpty {
+                            Text(dose.medicationNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    PillAmountVisualization(amount: DoseAmountFormatter.value(from: dose.amount))
+                        .accessibilityLabel("Dávka \(dose.amount)")
                 }
+                .accessibilityElement(children: .combine)
 
                 Spacer()
             }
@@ -131,7 +235,7 @@ private struct DoseRow: View {
                     StatusBadge(
                         text: statusText,
                         systemImage: confirmation.status == .confirmed ? "checkmark.circle.fill" : "forward.circle.fill",
-                        tint: confirmation.status == .confirmed ? .green : .orange
+                        tint: confirmation.status == .confirmed ? .green : .secondary
                     )
                     Text(confirmation.timestamp.shortTimeLabel)
                         .font(.caption)
@@ -142,7 +246,7 @@ private struct DoseRow: View {
                             try? await store.undoConfirmation(for: dose)
                         }
                     }
-                    .buttonStyle(DoseActionButtonStyle(kind: .undo))
+                    .buttonStyle(DoseActionButtonStyle(kind: .secondary))
                     .disabled(store.isSyncing)
                 }
             } else {
@@ -162,26 +266,20 @@ private struct DoseRow: View {
                         .buttonStyle(DoseActionButtonStyle(kind: .primary))
                         .disabled(store.isSyncing)
 
+                        Spacer()
+
                         Button {
                             showsSkipConfirmation = true
                         } label: {
                             Label("Přeskočit", systemImage: "forward.circle")
                         }
                         .buttonStyle(DoseActionButtonStyle(kind: .secondary))
-                        .controlSize(.small)
                         .disabled(store.isSyncing)
                     }
                 }
             }
         }
         .padding(.vertical, 8)
-        .padding(.horizontal, isOverdueToday ? 10 : 0)
-        .background {
-            if isOverdueToday {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.orange.opacity(0.12))
-            }
-        }
         .confirmationDialog(
             "Opravdu přeskočit dávku?",
             isPresented: $showsSkipConfirmation,
@@ -201,7 +299,6 @@ private struct DoseActionButtonStyle: ButtonStyle {
     enum Kind {
         case primary
         case secondary
-        case undo
     }
 
     @Environment(\.isEnabled) private var isEnabled
@@ -226,10 +323,8 @@ private struct DoseActionButtonStyle: ButtonStyle {
 
     private var font: Font {
         switch kind {
-        case .primary:
+        case .primary, .secondary:
             return .subheadline.weight(.semibold)
-        case .secondary, .undo:
-            return .caption.weight(.semibold)
         }
     }
 
@@ -239,35 +334,27 @@ private struct DoseActionButtonStyle: ButtonStyle {
             return .white
         case .secondary:
             return .secondary
-        case .undo:
-            return .teal
         }
     }
 
     private var horizontalPadding: CGFloat {
         switch kind {
-        case .primary:
+        case .primary, .secondary:
             return 14
-        case .secondary, .undo:
-            return 10
         }
     }
 
     private var verticalPadding: CGFloat {
         switch kind {
-        case .primary:
+        case .primary, .secondary:
             return 8
-        case .secondary, .undo:
-            return 6
         }
     }
 
     private var minimumHeight: CGFloat {
         switch kind {
-        case .primary:
+        case .primary, .secondary:
             return 36
-        case .secondary, .undo:
-            return 30
         }
     }
 
@@ -285,9 +372,6 @@ private struct DoseActionButtonStyle: ButtonStyle {
         case .secondary:
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-        case .undo:
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.teal.opacity(0.25), lineWidth: 1)
         }
     }
 
@@ -297,8 +381,6 @@ private struct DoseActionButtonStyle: ButtonStyle {
             return .teal
         case .secondary:
             return Color.secondary.opacity(0.08)
-        case .undo:
-            return Color.teal.opacity(0.09)
         }
     }
 }

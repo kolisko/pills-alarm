@@ -24,6 +24,63 @@ struct EmptyStateView: View {
     }
 }
 
+struct AppScreen<Content: View, Trailing: View>: View {
+    var title: String
+    var titleColor: Color
+    private let content: Content
+    private let trailing: Trailing
+
+    init(
+        title: String,
+        titleColor: Color = .primary,
+        @ViewBuilder trailing: () -> Trailing,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.titleColor = titleColor
+        self.trailing = trailing()
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            content
+        }
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text(title)
+                .font(.largeTitle.bold())
+                .foregroundStyle(titleColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .layoutPriority(0)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            trailing
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .background(Color(.systemBackground))
+    }
+}
+
+extension AppScreen where Trailing == EmptyView {
+    init(
+        title: String,
+        titleColor: Color = .primary,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(title: title, titleColor: titleColor, trailing: { EmptyView() }, content: content)
+    }
+}
+
 extension Color {
     init(hex: String) {
         var clean = hex.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -65,7 +122,7 @@ extension Date {
         case 2:
             return "Pozítří"
         default:
-            return shortDayLabel
+            return formatted(.dateTime.locale(Locale(identifier: "cs_CZ")).weekday(.wide).day().month())
         }
     }
 

@@ -6,67 +6,67 @@ struct PlanView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                syncStatusSection
+            AppScreen(title: "Plán") {
+                Button {
+                    newMedication = store.addMedication()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.title3.weight(.semibold))
+                }
+                .foregroundStyle(.teal)
+                .disabled(!store.hasCloudWorkspace)
+            } content: {
+                List {
+                    syncStatusSection
 
-                if store.medicationItems.isEmpty {
-                    EmptyStateView(title: "Zatím není vytvořený žádný plán", systemImage: "calendar.badge.plus")
-                        .listRowBackground(Color.clear)
-                } else {
-                    ForEach(store.medicationItems) { item in
-                        NavigationLink {
-                            MedicationEditorView(
-                                original: item.medication,
-                                source: item.source,
-                                isReadOnly: !store.canEditMedication(item)
-                            )
-                        } label: {
-                            HStack(spacing: 8) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 6) {
-                                        if item.source.isShared {
-                                            Image(systemName: "person.2.fill")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.teal)
-                                                .accessibilityLabel("Sdílený plán")
+                    if store.medicationItems.isEmpty {
+                        EmptyStateView(title: "Zatím není vytvořený žádný plán", systemImage: "calendar.badge.plus")
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(store.medicationItems) { item in
+                            NavigationLink {
+                                MedicationEditorView(
+                                    original: item.medication,
+                                    source: item.source,
+                                    isReadOnly: !store.canEditMedication(item)
+                                )
+                            } label: {
+                                HStack(spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            if item.source.isShared {
+                                                Image(systemName: "person.2.fill")
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(.teal)
+                                                    .accessibilityLabel("Sdílený plán")
+                                            }
+                                            Text(item.medication.name)
+                                                .font(.headline)
                                         }
-                                        Text(item.medication.name)
-                                            .font(.headline)
+                                        Text("\(item.medication.phases.count) fáze · start \(item.medication.startDate.formatted(date: .abbreviated, time: .omitted))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
                                     }
-                                    Text("\(item.medication.phases.count) fáze · start \(item.medication.startDate.formatted(date: .abbreviated, time: .omitted))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if item.source.isShared {
-                                    Text("Sdílené")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.teal)
+                                    Spacer()
+                                    if item.source.isShared {
+                                        Text("Sdílené")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.teal)
+                                    }
                                 }
                             }
+                            .deleteDisabled(!store.canEditMedication(item))
                         }
-                        .deleteDisabled(!store.canEditMedication(item))
-                    }
-                    .onDelete { offsets in
-                        let items = store.medicationItems
-                        for index in offsets {
-                            store.deleteMedication(items[index])
+                        .onDelete { offsets in
+                            let items = store.medicationItems
+                            for index in offsets {
+                                store.deleteMedication(items[index])
+                            }
                         }
                     }
                 }
-            }
-            .navigationTitle("Plán")
-            .refreshable {
-                await store.reload(showSyncIndicator: false)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        newMedication = store.addMedication()
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .disabled(!store.hasCloudWorkspace)
+                .refreshable {
+                    await store.reload(showSyncIndicator: false)
                 }
             }
             .sheet(item: $newMedication) { medication in
@@ -431,7 +431,7 @@ private struct PillAmountStepIcon: View {
 
 struct PillAmountVisualization: View {
     var amount: Double
-    private let doseColor = Color(red: 0.12, green: 0.48, blue: 0.72)
+    private let doseColor = Color.secondary
 
     private var normalizedAmount: Double {
         DoseAmountFormatter.normalized(amount)
@@ -486,9 +486,6 @@ private struct PillPortionIcon: View {
             let normalizedFraction = min(max(fraction, 0), 1)
 
             ZStack {
-                Circle()
-                    .fill(color.opacity(showsOutline ? 0.08 : 0.95))
-
                 if normalizedFraction > 0 {
                     if normalizedFraction >= 1 {
                         Circle()
@@ -498,21 +495,6 @@ private struct PillPortionIcon: View {
                             .fill(color.opacity(0.95))
                     }
                 }
-
-                if showsOutline {
-                    Circle()
-                        .stroke(color.opacity(0.45), lineWidth: 1.4)
-                }
-
-                if normalizedFraction > 0, normalizedFraction < 1 {
-                    CircleSegmentShape(fraction: normalizedFraction)
-                        .stroke(Color.white.opacity(0.78), lineWidth: 1.1)
-                }
-            }
-            .clipShape(Circle())
-            .overlay {
-                Circle()
-                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
             }
             .frame(width: diameter, height: diameter)
             .frame(width: proxy.size.width, height: proxy.size.height)

@@ -4,34 +4,50 @@ import UserNotifications
 struct SettingsView: View {
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    NavigationLink {
-                        AlarmAuditView()
-                    } label: {
-                        Label("Alarmy", systemImage: "bell.badge")
-                    }
+            AppScreen(title: "Nastavení") {
+                List {
+                    Section {
+                        NavigationLink {
+                            AlarmAuditView()
+                        } label: {
+                            SettingsNavigationRow(title: "Alarmy", systemImage: "bell.badge")
+                        }
 
-                    NavigationLink {
-                        AlarmSettingsView()
-                    } label: {
-                        Label("Nastavení alarmů", systemImage: "slider.horizontal.3")
-                    }
+                        NavigationLink {
+                            AlarmSettingsView()
+                        } label: {
+                            SettingsNavigationRow(title: "Nastavení alarmů", systemImage: "slider.horizontal.3")
+                        }
 
-                    NavigationLink {
-                        SyncSettingsView()
-                    } label: {
-                        Label("Synchronizace", systemImage: "arrow.triangle.2.circlepath")
-                    }
+                        NavigationLink {
+                            SyncSettingsView()
+                        } label: {
+                            SettingsNavigationRow(title: "Synchronizace", systemImage: "arrow.triangle.2.circlepath")
+                        }
 
-                    NavigationLink {
-                        VersionInfoView()
-                    } label: {
-                        Label("Verze", systemImage: "info.circle")
+                        NavigationLink {
+                            VersionInfoView()
+                        } label: {
+                            SettingsNavigationRow(title: "Verze", systemImage: "info.circle")
+                        }
                     }
                 }
             }
-            .navigationTitle("Nastavení")
+        }
+    }
+}
+
+private struct SettingsNavigationRow: View {
+    var title: String
+    var systemImage: String
+
+    var body: some View {
+        Label {
+            Text(title)
+                .foregroundStyle(.primary)
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(.teal)
         }
     }
 }

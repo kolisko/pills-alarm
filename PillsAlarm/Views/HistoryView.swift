@@ -9,49 +9,50 @@ struct HistoryView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if confirmations.isEmpty {
-                    EmptyStateView(title: "Zatím žádná historie", systemImage: "clock")
-                        .listRowBackground(Color.clear)
-                } else {
-                    ForEach(confirmations) { item in
-                        let confirmation = item.confirmation
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                StatusBadge(
-                                    text: confirmation.status.label,
-                                    systemImage: confirmation.status == .confirmed ? "checkmark.circle.fill" : "forward.circle.fill",
-                                    tint: confirmation.status == .confirmed ? .green : .orange
-                                )
-                                Spacer()
-                                Text(confirmation.timestamp.formatted(date: .abbreviated, time: .shortened))
+            AppScreen(title: "Historie") {
+                List {
+                    if confirmations.isEmpty {
+                        EmptyStateView(title: "Zatím žádná historie", systemImage: "clock")
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(confirmations) { item in
+                            let confirmation = item.confirmation
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    StatusBadge(
+                                        text: confirmation.status.label,
+                                        systemImage: confirmation.status == .confirmed ? "checkmark.circle.fill" : "forward.circle.fill",
+                                        tint: confirmation.status == .confirmed ? .green : .orange
+                                    )
+                                    Spacer()
+                                    Text(confirmation.timestamp.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                HStack(spacing: 6) {
+                                    if item.source.isShared {
+                                        Image(systemName: "person.2.fill")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.teal)
+                                            .accessibilityLabel("Sdílený záznam")
+                                    }
+                                    PillAmountVisualization(amount: DoseAmountFormatter.value(from: confirmation.amount))
+                                        .accessibilityLabel("Dávka \(confirmation.amount)")
+                                    Text(summary(for: confirmation, memberName: store.displayName(for: confirmation)))
+                                        .font(.headline)
+                                }
+                                .accessibilityElement(children: .combine)
+                                Text("Plánováno \(confirmation.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            HStack(spacing: 6) {
-                                if item.source.isShared {
-                                    Image(systemName: "person.2.fill")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.teal)
-                                        .accessibilityLabel("Sdílený záznam")
-                                }
-                                PillAmountVisualization(amount: DoseAmountFormatter.value(from: confirmation.amount))
-                                    .accessibilityLabel("Dávka \(confirmation.amount)")
-                                Text(summary(for: confirmation, memberName: store.displayName(for: confirmation)))
-                                    .font(.headline)
-                            }
-                            .accessibilityElement(children: .combine)
-                            Text("Plánováno \(confirmation.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
                     }
                 }
-            }
-            .navigationTitle("Historie")
-            .refreshable {
-                await store.reload(showSyncIndicator: false)
+                .refreshable {
+                    await store.reload(showSyncIndicator: false)
+                }
             }
         }
     }

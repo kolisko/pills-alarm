@@ -14,39 +14,40 @@ struct GroupView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                switch store.loadState {
-                case .loading, .idle:
-                    EmptyView()
+            AppScreen(title: "Skupina") {
+                Form {
+                    switch store.loadState {
+                    case .loading, .idle:
+                        EmptyView()
 
-                case .failed:
-                    EmptyView()
+                    case .failed:
+                        EmptyView()
 
-                case .requiresICloudAccount(let message):
-                    Section {
-                        Label(message, systemImage: "icloud.slash")
-                            .foregroundStyle(.secondary)
-                        Button("Zkusit znovu") {
-                            Task { await store.reload() }
+                    case .requiresICloudAccount(let message):
+                        Section {
+                            Label(message, systemImage: "icloud.slash")
+                                .foregroundStyle(.secondary)
+                            Button("Zkusit znovu") {
+                                Task { await store.reload() }
+                            }
+                        }
+
+                    case .missingGroup:
+                        createGroupSection
+
+                    case .ready:
+                        if store.hasGroup || !store.sharedWorkspaceProfiles.isEmpty {
+                            realGroupSections
+                        } else {
+                            createGroupSection
                         }
                     }
 
-                case .missingGroup:
-                    createGroupSection
-
-                case .ready:
-                    if store.hasGroup || !store.sharedWorkspaceProfiles.isEmpty {
-                        realGroupSections
-                    } else {
-                        createGroupSection
-                    }
+                    diagnosticsSection
                 }
-
-                diagnosticsSection
-            }
-            .navigationTitle("Skupina")
-            .refreshable {
-                await store.reload(showSyncIndicator: false)
+                .refreshable {
+                    await store.reload(showSyncIndicator: false)
+                }
             }
             .sheet(item: $sharingController) { controller in
                 CloudSharingView(controller: controller)
