@@ -41,17 +41,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(
         _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = SceneDelegate.self
+        return configuration
+    }
+
+    func application(
+        _ application: UIApplication,
         userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
     ) {
-        Task {
-            do {
-                try await MedicationStore.acceptShare(cloudKitShareMetadata)
-                NotificationCenter.default.post(name: .cloudKitShareDidAccept, object: nil)
-                NotificationCenter.default.post(name: .cloudKitDataDidChange, object: CloudKitRefreshRequest())
-            } catch {
-                NotificationCenter.default.post(name: .cloudKitDataDidChange, object: error)
-            }
-        }
+        CloudKitShareAcceptanceHandler.accept(cloudKitShareMetadata)
     }
 
     func application(
@@ -69,6 +71,39 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
             request.complete(.noData)
+        }
+    }
+}
+
+final class SceneDelegate: NSObject, UIWindowSceneDelegate {
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        if let metadata = connectionOptions.cloudKitShareMetadata {
+            CloudKitShareAcceptanceHandler.accept(metadata)
+        }
+    }
+
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
+    ) {
+        CloudKitShareAcceptanceHandler.accept(cloudKitShareMetadata)
+    }
+}
+
+private enum CloudKitShareAcceptanceHandler {
+    static func accept(_ cloudKitShareMetadata: CKShare.Metadata) {
+        Task {
+            do {
+                try await MedicationStore.acceptShare(cloudKitShareMetadata)
+                NotificationCenter.default.post(name: .cloudKitShareDidAccept, object: nil)
+                NotificationCenter.default.post(name: .cloudKitDataDidChange, object: CloudKitRefreshRequest())
+            } catch {
+                NotificationCenter.default.post(name: .cloudKitDataDidChange, object: error)
+            }
         }
     }
 }

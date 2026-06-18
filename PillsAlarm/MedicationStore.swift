@@ -706,7 +706,19 @@ final class MedicationStore: ObservableObject {
     }
 
     static func acceptShare(_ metadata: CKShare.Metadata) async throws {
-        let reference = try await CloudKitRepository().acceptShare(metadata)
+        let reference: StoredGroupReference
+        switch metadata.participantStatus {
+        case .pending:
+            reference = try await CloudKitRepository().acceptShare(metadata)
+        case .accepted:
+            reference = try sharedGroupReference(from: metadata)
+        case .unknown:
+            throw CloudKitShareError.unexpectedParticipantStatus("unknown")
+        case .removed:
+            throw CloudKitShareError.unexpectedParticipantStatus("removed")
+        @unknown default:
+            throw CloudKitShareError.unexpectedParticipantStatus("unsupported")
+        }
         saveAcceptedSharedGroupReference(reference, defaults: .standard)
     }
 
@@ -822,28 +834,21 @@ final class MedicationStore: ObservableObject {
         let privateGroupSnapshots = allSnapshots.filter {
             $0.databaseScope == .private && !cloud.isCanonicalPersonalWorkspace($0) && !$0.members.isEmpty
         }
-        let sharedSnapshots = allSnapshots.filter { $0.databaseScope == .shared }
         let hiddenSharedIds = hiddenSharedWorkspaceIds
         var snapshots = [personalSnapshot]
         var seenIds = Set([Self.storedGroupReference(from: personalSnapshot).id])
-        var acceptedSharedReferences = loadAcceptedSharedGroupReferences()
 
-        if let legacyReference = loadStoredGroupReference(),
-           legacyReference.databaseScope == CKDatabase.Scope.shared.rawValue,
-           !acceptedSharedReferences.contains(where: { $0.id == legacyReference.id }) {
-            Self.saveAcceptedSharedGroupReference(legacyReference, defaults: defaults)
-            acceptedSharedReferences.append(legacyReference)
-        }
-
-        for reference in acceptedSharedReferences {
+        for reference in loadAcceptedSharedGroupReferences() {
             guard reference.databaseScope == CKDatabase.Scope.shared.rawValue,
                   !hiddenSharedIds.contains(reference.id),
                   !seenIds.contains(reference.id) else { continue }
 
-            if let snapshot = try await fetchAcceptedSharedSnapshot(reference: reference) {
-                snapshots.append(snapshot)
-                seenIds.insert(reference.id)
+            guard let snapshot = try await cloud.fetchGroupSnapshot(reference: reference) else {
+                throw CloudKitShareError.acceptedShareUnavailable(reference.id)
             }
+
+            snapshots.append(snapshot)
+            seenIds.insert(reference.id)
         }
 
         for snapshot in privateGroupSnapshots {
@@ -853,28 +858,7 @@ final class MedicationStore: ObservableObject {
             seenIds.insert(id)
         }
 
-        for snapshot in sharedSnapshots {
-            let id = Self.storedGroupReference(from: snapshot).id
-            guard !seenIds.contains(id), !hiddenSharedIds.contains(id) else { continue }
-            snapshots.append(snapshot)
-            seenIds.insert(id)
-        }
-
         return snapshots
-    }
-
-    private func fetchAcceptedSharedSnapshot(reference: StoredGroupReference) async throws -> CloudSnapshot? {
-        for attempt in 0..<3 {
-            if let snapshot = try await cloud.fetchGroupSnapshot(reference: reference) {
-                return snapshot
-            }
-
-            if attempt < 2 {
-                try await Task.sleep(for: .seconds(1))
-            }
-        }
-
-        return nil
     }
 
     private func fail(_ error: Error) {
@@ -1386,6 +1370,19 @@ final class MedicationStore: ObservableObject {
         }
     }
 
+    private static func sharedGroupReference(from metadata: CKShare.Metadata) throws -> StoredGroupReference {
+        guard let rootID = metadata.hierarchicalRootRecordID else {
+            throw CloudKitShareError.missingRootRecord
+        }
+
+        return StoredGroupReference(
+            recordName: rootID.recordName,
+            zoneName: rootID.zoneID.zoneName,
+            ownerName: rootID.zoneID.ownerName,
+            databaseScope: CKDatabase.Scope.shared.rawValue
+        )
+    }
+
     private static func storedGroupReference(from snapshot: CloudSnapshot) -> StoredGroupReference {
         StoredGroupReference(
             recordName: snapshot.group.recordID.recordName,
@@ -1570,6 +1567,8 @@ private enum StoreError: LocalizedError {
 private enum CloudKitShareError: LocalizedError {
     case invalidExistingShare
     case missingRootRecord
+    case unexpectedParticipantStatus(String)
+    case acceptedShareUnavailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -1577,6 +1576,10 @@ private enum CloudKitShareError: LocalizedError {
             return "iCloud vrátil neplatný záznam sdílení. Zkus pozvánku otevřít znovu."
         case .missingRootRecord:
             return "iCloud pozvánka neobsahuje kořenový záznam sdílení. Požádej odesílatele o novou pozvánku."
+        case .unexpectedParticipantStatus(let status):
+            return "iCloud pozvánka má neočekávaný stav účastníka: \(status)."
+        case .acceptedShareUnavailable(let reference):
+            return "iCloud sdílení bylo přijato, ale sdílený záznam nejde načíst: \(reference)."
         }
     }
 }
