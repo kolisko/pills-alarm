@@ -429,7 +429,7 @@ private struct PillAmountStepIcon: View {
     }
 }
 
-private struct PillAmountVisualization: View {
+struct PillAmountVisualization: View {
     var amount: Double
     private let doseColor = Color(red: 0.12, green: 0.48, blue: 0.72)
 

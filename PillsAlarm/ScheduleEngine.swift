@@ -42,10 +42,9 @@ enum ScheduleEngine {
                 of: date
             ) ?? date
             let baseEventId = eventId(medicationId: medication.id, timeId: doseTime.id, scheduledDate: scheduledDate, calendar: calendar)
-            let eventId = workspaceId.isEmpty ? baseEventId : "\(workspaceId)|\(baseEventId)"
 
             return GeneratedDose(
-                id: eventId,
+                id: baseEventId,
                 baseEventId: baseEventId,
                 workspaceId: workspaceId,
                 isShared: isShared,

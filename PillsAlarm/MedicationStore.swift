@@ -192,14 +192,27 @@ final class MedicationStore: ObservableObject {
 
             apply(snapshots: resolvedSnapshots)
 
+            var subscriptionError: Error?
             for context in workspaceContexts.values {
-                try? await cloud.installWorkspaceSubscription(groupRecord: context.groupRecord, database: context.database)
+                do {
+                    try await cloud.installWorkspaceSubscription(
+                        groupRecord: context.groupRecord,
+                        database: context.database,
+                        databaseScope: context.databaseScope
+                    )
+                } catch {
+                    subscriptionError = error
+                }
             }
 
             guard generation == loadGeneration else { return }
 
             loadState = .ready
-            syncErrorMessage = nil
+            if let subscriptionError {
+                recordSyncError(subscriptionError)
+            } else {
+                syncErrorMessage = nil
+            }
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
         } catch {
             fail(error)
@@ -245,7 +258,15 @@ final class MedicationStore: ObservableObject {
             careGroupName = snapshot.name
             members = snapshot.members
             activeMemberId = snapshot.members.first?.id
-            try? await cloud.installWorkspaceSubscription(groupRecord: snapshot.group, database: snapshot.database)
+            do {
+                try await cloud.installWorkspaceSubscription(
+                    groupRecord: snapshot.group,
+                    database: snapshot.database,
+                    databaseScope: snapshot.databaseScope
+                )
+            } catch {
+                recordSyncError(error)
+            }
             loadState = .ready
             await reload()
         } catch {
@@ -359,12 +380,15 @@ final class MedicationStore: ObservableObject {
     }
 
     func confirmation(for dose: GeneratedDose) -> DoseConfirmation? {
-        confirmations[dose.id] ?? confirmations[dose.baseEventId]
+        confirmations[dose.id]
+            ?? confirmations[dose.baseEventId]
+            ?? confirmationItems.first { Self.matches($0.confirmation, dose: dose) }?.confirmation
     }
 
     private func confirmationEventIds(for dose: GeneratedDose, including confirmation: DoseConfirmation? = nil) -> [String] {
         var eventIds: [String] = []
-        for eventId in [dose.id, dose.baseEventId, confirmation?.eventId].compactMap({ $0 }) {
+        let legacyWorkspaceEventId = dose.workspaceId.isEmpty ? nil : "\(dose.workspaceId)|\(dose.baseEventId)"
+        for eventId in [dose.id, dose.baseEventId, legacyWorkspaceEventId, confirmation?.eventId].compactMap({ $0 }) {
             if !eventIds.contains(eventId) {
                 eventIds.append(eventId)
             }
@@ -390,7 +414,7 @@ final class MedicationStore: ObservableObject {
         let memberId = try await currentConfirmationMemberId(in: context)
 
         let confirmation = DoseConfirmation(
-            eventId: dose.id,
+            eventId: dose.baseEventId,
             medicationId: dose.medicationId,
             timeId: dose.timeId,
             scheduledDate: dose.scheduledDate,
@@ -744,7 +768,15 @@ final class MedicationStore: ObservableObject {
             saveStoredGroupReference(from: snapshot)
             apply(snapshot: snapshot)
             workspaceCandidates = []
-            try? await cloud.installWorkspaceSubscription(groupRecord: snapshot.group, database: snapshot.database)
+            do {
+                try await cloud.installWorkspaceSubscription(
+                    groupRecord: snapshot.group,
+                    database: snapshot.database,
+                    databaseScope: snapshot.databaseScope
+                )
+            } catch {
+                recordSyncError(error)
+            }
             loadState = .ready
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
         } catch {
@@ -1050,17 +1082,15 @@ final class MedicationStore: ObservableObject {
             }
         }
 
-        let validConfirmationKeys = Set(medicationItems.flatMap { item -> [String] in
-            let contextId = item.source.id
-            return item.medication.doseTimes.flatMap { doseTime in
-                let base = "\(item.medication.id.uuidString)-\(doseTime.id.uuidString)"
-                return contextId == personalWorkspaceId ? [base, "\(contextId)|\(base)"] : ["\(contextId)|\(base)"]
+        let validConfirmationSlots = Set(medicationItems.flatMap { item in
+            item.medication.doseTimes.map { doseTime in
+                Self.confirmationSlotKey(medicationId: item.medication.id, timeId: doseTime.id)
             }
         })
 
         for context in contexts {
             for confirmation in context.confirmations {
-                guard validConfirmationKeys.contains(Self.confirmationSlotKey(confirmation.eventId)) else {
+                guard validConfirmationSlots.contains(Self.confirmationSlotKey(for: confirmation)) else {
                     continue
                 }
                 let source = source(for: context, medicationId: confirmation.medicationId)
@@ -1137,7 +1167,7 @@ final class MedicationStore: ObservableObject {
     private func confirmationForSharingChange(_ confirmation: DoseConfirmation, to destination: WorkspaceContext) -> DoseConfirmation {
         var updated = confirmation
         let baseEventId = Self.baseEventId(from: confirmation.eventId)
-        updated.eventId = destination.id == personalWorkspaceId ? baseEventId : "\(destination.id)|\(baseEventId)"
+        updated.eventId = baseEventId
         return updated
     }
 
@@ -1171,22 +1201,18 @@ final class MedicationStore: ObservableObject {
         )
     }
 
-    private static func confirmationSlotKey(_ eventId: String) -> String {
-        if let separator = eventId.range(of: "|", options: .backwards) {
-            let workspaceId = String(eventId[..<separator.lowerBound])
-            let baseEventId = String(eventId[separator.upperBound...])
-            let baseParts = baseEventId.split(separator: "-").map(String.init)
-            guard baseParts.count >= 11 else { return eventId }
-            let medicationId = baseParts.prefix(5).joined(separator: "-")
-            let timeId = baseParts.dropFirst(5).prefix(5).joined(separator: "-")
-            return "\(workspaceId)|\(medicationId)-\(timeId)"
-        }
+    private static func confirmationSlotKey(for confirmation: DoseConfirmation) -> String {
+        confirmationSlotKey(medicationId: confirmation.medicationId, timeId: confirmation.timeId)
+    }
 
-        let baseParts = eventId.split(separator: "-").map(String.init)
-        guard baseParts.count >= 11 else { return eventId }
-        let medicationId = baseParts.prefix(5).joined(separator: "-")
-        let timeId = baseParts.dropFirst(5).prefix(5).joined(separator: "-")
-        return "\(medicationId)-\(timeId)"
+    private static func confirmationSlotKey(medicationId: UUID, timeId: UUID) -> String {
+        "\(medicationId.uuidString)-\(timeId.uuidString)"
+    }
+
+    private static func matches(_ confirmation: DoseConfirmation, dose: GeneratedDose) -> Bool {
+        confirmation.medicationId == dose.medicationId
+            && confirmation.timeId == dose.timeId
+            && Calendar.current.isDate(confirmation.scheduledDate, inSameDayAs: dose.scheduledDate)
     }
 
     private var currentOwnedGroupMember: CareMember? {
@@ -1841,7 +1867,18 @@ final class CloudKitRepository {
         _ = try await modify(recordsToSave: [], recordIDsToDelete: [recordID], in: database)
     }
 
-    func installWorkspaceSubscription(groupRecord: CKRecord, database: CKDatabase) async throws {
+    func installWorkspaceSubscription(groupRecord: CKRecord, database: CKDatabase, databaseScope: CKDatabase.Scope) async throws {
+        if databaseScope == .shared {
+            let subscription = CKDatabaseSubscription(subscriptionID: "shared-database-changes")
+            let info = CKSubscription.NotificationInfo()
+            info.shouldSendContentAvailable = true
+            subscription.notificationInfo = info
+            _ = try await save(subscription: subscription, in: database)
+            return
+        }
+
+        guard databaseScope == .private else { return }
+
         let zoneID = groupRecord.recordID.zoneID
         let subscriptionID = [
             "workspace-zone",
@@ -1970,16 +2007,7 @@ final class CloudKitRepository {
     }
 
     private func snapshot(for group: CKRecord, records: [CKRecord], database: CKDatabase, databaseScope: CKDatabase.Scope) -> CloudSnapshot {
-        let linkedRecords = records.filter { record in
-            guard record.recordID != group.recordID,
-                  let reference = record[Field.group] as? CKRecord.Reference else {
-                return false
-            }
-
-            return reference.recordID.recordName == group.recordID.recordName
-                && reference.recordID.zoneID.zoneName == group.recordID.zoneID.zoneName
-                && reference.recordID.zoneID.ownerName == group.recordID.zoneID.ownerName
-        }
+        let linkedRecords = records.filter { isLinked(record: $0, to: group) }
 
         return CloudSnapshot(
             group: group,
@@ -2015,30 +2043,33 @@ final class CloudKitRepository {
 
     private func fetchLinkedRecords(group: CKRecord, database: CKDatabase) async throws -> [CKRecord] {
         let records = try await fetchRecordsInZone(zoneID: group.recordID.zoneID, database: database)
-        return records.filter { record in
-            guard record.recordID != group.recordID,
-                  let reference = record[Field.group] as? CKRecord.Reference else {
-                return false
-            }
-
-            return reference.recordID.recordName == group.recordID.recordName
-                && reference.recordID.zoneID.zoneName == group.recordID.zoneID.zoneName
-                && reference.recordID.zoneID.ownerName == group.recordID.zoneID.ownerName
-        }
+        return records.filter { isLinked(record: $0, to: group) }
     }
 
     private func fetchLinkedRecords(recordType: String, group: CKRecord, database: CKDatabase) async throws -> [CKRecord] {
         let records = try await fetchRecordsInZone(zoneID: group.recordID.zoneID, database: database)
             .filter { $0.recordType == recordType }
-        return records.filter { record in
-            guard let reference = record[Field.group] as? CKRecord.Reference else {
-                return false
-            }
+        return records.filter { isLinked(record: $0, to: group) }
+    }
 
-            return reference.recordID.recordName == group.recordID.recordName
-                && reference.recordID.zoneID.zoneName == group.recordID.zoneID.zoneName
-                && reference.recordID.zoneID.ownerName == group.recordID.zoneID.ownerName
+    private func isLinked(record: CKRecord, to group: CKRecord) -> Bool {
+        guard record.recordID != group.recordID else { return false }
+
+        if let parentID = record.parent?.recordID,
+           Self.isSameLogicalRecord(parentID, as: group.recordID) {
+            return true
         }
+
+        guard let reference = record[Field.group] as? CKRecord.Reference else {
+            return false
+        }
+
+        return Self.isSameLogicalRecord(reference.recordID, as: group.recordID)
+    }
+
+    private static func isSameLogicalRecord(_ lhs: CKRecord.ID, as rhs: CKRecord.ID) -> Bool {
+        lhs.recordName == rhs.recordName
+            && lhs.zoneID.zoneName == rhs.zoneID.zoneName
     }
 
     private func fetchRecordsInZone(zoneID: CKRecordZone.ID, database: CKDatabase) async throws -> [CKRecord] {

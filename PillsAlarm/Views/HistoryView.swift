@@ -35,9 +35,12 @@ struct HistoryView: View {
                                         .foregroundStyle(.teal)
                                         .accessibilityLabel("Sdílený záznam")
                                 }
+                                PillAmountVisualization(amount: DoseAmountFormatter.value(from: confirmation.amount))
+                                    .accessibilityLabel("Dávka \(confirmation.amount)")
                                 Text(summary(for: confirmation, memberName: store.displayName(for: confirmation)))
                                     .font(.headline)
                             }
+                            .accessibilityElement(children: .combine)
                             Text("Plánováno \(confirmation.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -55,9 +58,14 @@ struct HistoryView: View {
 
     private func summary(for confirmation: DoseConfirmation, memberName: String?) -> String {
         guard let memberName else {
-            return confirmation.amount
+            return confirmation.status.label
         }
 
-        return "\(confirmation.amount) potvrdil/a \(memberName)"
+        switch confirmation.status {
+        case .confirmed:
+            return "potvrdil/a \(memberName)"
+        case .skipped:
+            return "přeskočil/a \(memberName)"
+        }
     }
 }

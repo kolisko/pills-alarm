@@ -104,9 +104,14 @@ private struct DoseRow: View {
                         Text(dose.medicationName)
                             .font(.headline)
                     }
-                    Text("Dávka \(dose.amount) · \(dose.phaseTitle)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        PillAmountVisualization(amount: DoseAmountFormatter.value(from: dose.amount))
+                            .accessibilityLabel("Dávka \(dose.amount)")
+                        Text(dose.phaseTitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
                     if !dose.medicationNote.isEmpty {
                         Text(dose.medicationNote)
                             .font(.caption)
