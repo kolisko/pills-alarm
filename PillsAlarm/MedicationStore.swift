@@ -203,6 +203,10 @@ final class MedicationStore: ObservableObject {
         }
     }
 
+    func reportSyncError(_ error: Error) {
+        recordSyncError(error)
+    }
+
     func createGroup(name: String, firstMemberName: String) async {
         beginSync()
         defer { endSync() }
@@ -703,7 +707,7 @@ final class MedicationStore: ObservableObject {
 
     static func acceptShare(_ metadata: CKShare.Metadata) async throws {
         let reference = try await CloudKitRepository().acceptShare(metadata)
-        saveStoredGroupReference(reference, defaults: .standard)
+        saveAcceptedSharedGroupReference(reference, defaults: .standard)
     }
 
     func selectWorkspace(_ candidate: WorkspaceCandidate) async {
@@ -822,6 +826,25 @@ final class MedicationStore: ObservableObject {
         let hiddenSharedIds = hiddenSharedWorkspaceIds
         var snapshots = [personalSnapshot]
         var seenIds = Set([Self.storedGroupReference(from: personalSnapshot).id])
+        var acceptedSharedReferences = loadAcceptedSharedGroupReferences()
+
+        if let legacyReference = loadStoredGroupReference(),
+           legacyReference.databaseScope == CKDatabase.Scope.shared.rawValue,
+           !acceptedSharedReferences.contains(where: { $0.id == legacyReference.id }) {
+            Self.saveAcceptedSharedGroupReference(legacyReference, defaults: defaults)
+            acceptedSharedReferences.append(legacyReference)
+        }
+
+        for reference in acceptedSharedReferences {
+            guard reference.databaseScope == CKDatabase.Scope.shared.rawValue,
+                  !hiddenSharedIds.contains(reference.id),
+                  !seenIds.contains(reference.id) else { continue }
+
+            if let snapshot = try await fetchAcceptedSharedSnapshot(reference: reference) {
+                snapshots.append(snapshot)
+                seenIds.insert(reference.id)
+            }
+        }
 
         for snapshot in privateGroupSnapshots {
             let id = Self.storedGroupReference(from: snapshot).id
@@ -838,6 +861,20 @@ final class MedicationStore: ObservableObject {
         }
 
         return snapshots
+    }
+
+    private func fetchAcceptedSharedSnapshot(reference: StoredGroupReference) async throws -> CloudSnapshot? {
+        for attempt in 0..<3 {
+            if let snapshot = try await cloud.fetchGroupSnapshot(reference: reference) {
+                return snapshot
+            }
+
+            if attempt < 2 {
+                try await Task.sleep(for: .seconds(1))
+            }
+        }
+
+        return nil
     }
 
     private func fail(_ error: Error) {
@@ -1340,6 +1377,15 @@ final class MedicationStore: ObservableObject {
         }
     }
 
+    private static func saveAcceptedSharedGroupReference(_ reference: StoredGroupReference, defaults: UserDefaults) {
+        var references = loadAcceptedSharedGroupReferences(defaults: defaults)
+        references.removeAll { $0.id == reference.id }
+        references.append(reference)
+        if let data = try? JSONEncoder().encode(references) {
+            defaults.set(data, forKey: acceptedSharedGroupReferencesKey)
+        }
+    }
+
     private static func storedGroupReference(from snapshot: CloudSnapshot) -> StoredGroupReference {
         StoredGroupReference(
             recordName: snapshot.group.recordID.recordName,
@@ -1357,6 +1403,18 @@ final class MedicationStore: ObservableObject {
         return try? JSONDecoder().decode(StoredGroupReference.self, from: data)
     }
 
+    private func loadAcceptedSharedGroupReferences() -> [StoredGroupReference] {
+        Self.loadAcceptedSharedGroupReferences(defaults: defaults)
+    }
+
+    private static func loadAcceptedSharedGroupReferences(defaults: UserDefaults) -> [StoredGroupReference] {
+        guard let data = defaults.data(forKey: acceptedSharedGroupReferencesKey) else {
+            return []
+        }
+
+        return (try? JSONDecoder().decode([StoredGroupReference].self, from: data)) ?? []
+    }
+
     private var hiddenSharedWorkspaceIds: Set<String> {
         guard let ids = defaults.array(forKey: Self.hiddenSharedWorkspaceIdsKey) as? [String] else {
             return []
@@ -1371,6 +1429,7 @@ final class MedicationStore: ObservableObject {
 
     private static let memberColors = ["#2F80ED", "#27AE60", "#EB5757", "#9B51E0", "#F2994A", "#00A3A3"]
     static let storedGroupReferenceKey = "PillCareStoredGroupReference"
+    private static let acceptedSharedGroupReferencesKey = "PillCareAcceptedSharedGroupReferences"
     private static let hiddenSharedWorkspaceIdsKey = "PillCareHiddenSharedWorkspaceIds"
     private static let legacyPersonalConfirmationMemberId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 }

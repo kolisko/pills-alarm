@@ -4,6 +4,7 @@ import UserNotifications
 
 extension Notification.Name {
     static let cloudKitDataDidChange = Notification.Name("cloudKitDataDidChange")
+    static let cloudKitShareDidAccept = Notification.Name("cloudKitShareDidAccept")
 }
 
 final class CloudKitRefreshRequest {
@@ -45,6 +46,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Task {
             do {
                 try await MedicationStore.acceptShare(cloudKitShareMetadata)
+                NotificationCenter.default.post(name: .cloudKitShareDidAccept, object: nil)
                 NotificationCenter.default.post(name: .cloudKitDataDidChange, object: CloudKitRefreshRequest())
             } catch {
                 NotificationCenter.default.post(name: .cloudKitDataDidChange, object: error)

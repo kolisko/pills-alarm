@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: MedicationStore
+    @State private var selectedTab: AppTab = .today
 
     var body: some View {
         Group {
@@ -21,6 +22,9 @@ struct ContentView: View {
                             .presentationDetents([.medium, .large])
                             .presentationDragIndicator(.visible)
                     }
+                    .onReceive(NotificationCenter.default.publisher(for: .cloudKitShareDidAccept)) { _ in
+                        selectedTab = .group
+                    }
             }
         }
     }
@@ -32,31 +36,36 @@ struct ContentView: View {
     }
 
     private var appTabs: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             TodayView()
                 .tabItem {
                     Label("Dnes", systemImage: "checklist")
                 }
+                .tag(AppTab.today)
 
             PlanView()
                 .tabItem {
                     Label("Plán", systemImage: "calendar.badge.clock")
                 }
+                .tag(AppTab.plan)
 
             GroupView()
                 .tabItem {
                     Label("Skupina", systemImage: "person.3")
                 }
+                .tag(AppTab.group)
 
             HistoryView()
                 .tabItem {
                     Label("Historie", systemImage: "clock.arrow.circlepath")
                 }
+                .tag(AppTab.history)
 
             SettingsView()
                 .tabItem {
                     Label("Nastavení", systemImage: "gearshape")
                 }
+                .tag(AppTab.settings)
         }
         .tint(.teal)
         .onChange(of: store.medications) {
@@ -66,6 +75,14 @@ struct ContentView: View {
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: store)
         }
     }
+}
+
+private enum AppTab: Hashable {
+    case today
+    case plan
+    case group
+    case history
+    case settings
 }
 
 private struct SyncOverlay: View {

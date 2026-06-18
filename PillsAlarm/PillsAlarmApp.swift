@@ -136,6 +136,8 @@ struct PillsAlarmApp: App {
                         cloudSync.scheduleReload(store: store) {
                             request.complete(.newData)
                         }
+                    } else if let error = notification.object as? Error {
+                        store.reportSyncError(error)
                     } else {
                         cloudSync.scheduleReload(store: store)
                     }
