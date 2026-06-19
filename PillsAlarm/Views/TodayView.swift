@@ -376,12 +376,17 @@ private struct DoseRow: View {
             && dose.scheduledDate < Date()
     }
 
+    private var isResolved: Bool {
+        confirmation != nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(dose.timeLabel)
                         .font(.headline)
+                        .foregroundStyle(isResolved ? .secondary : .primary)
                     Text(dose.scheduledTime.label)
                         .font(.caption)
                         .foregroundStyle(isOverdueToday ? .red : .secondary)
@@ -391,14 +396,15 @@ private struct DoseRow: View {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
+                            Text(dose.medicationName)
+                                .font(.headline)
+                                .foregroundStyle(isResolved ? .secondary : .primary)
                             if dose.isShared {
                                 Image(systemName: "person.2.fill")
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.teal)
+                                    .foregroundStyle(.secondary)
                                     .accessibilityLabel("Sdílená dávka")
                             }
-                            Text(dose.medicationName)
-                                .font(.headline)
                         }
                         Text(dose.phaseTitle)
                             .font(.caption)
@@ -434,12 +440,17 @@ private struct DoseRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("Zpět") {
+                    Button {
                         Task {
                             try? await store.undoConfirmation(for: dose)
                         }
+                    } label: {
+                        Text("Zpět")
+                            .font(.caption)
+                            .underline()
                     }
-                    .buttonStyle(DoseActionButtonStyle(kind: .secondary))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                     .disabled(store.isSyncing)
                 }
             } else {

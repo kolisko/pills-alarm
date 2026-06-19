@@ -38,14 +38,14 @@ struct PlanView: View {
                                 HStack(spacing: 8) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         HStack(spacing: 6) {
+                                            Text(item.medication.name)
+                                                .font(.headline)
                                             if item.source.isShared {
                                                 Image(systemName: "person.2.fill")
                                                     .font(.caption.weight(.semibold))
-                                                    .foregroundStyle(.teal)
+                                                    .foregroundStyle(.secondary)
                                                     .accessibilityLabel("Sdílený plán")
                                             }
-                                            Text(item.medication.name)
-                                                .font(.headline)
                                         }
                                         Text("\(item.medication.phases.count) fáze · start \(item.medication.startDate.formatted(date: .abbreviated, time: .omitted))")
                                             .font(.caption)
