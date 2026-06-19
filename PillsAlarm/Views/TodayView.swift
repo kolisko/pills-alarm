@@ -6,9 +6,6 @@ struct TodayView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedDate = Date()
     @State private var displayedDate = Date()
-    @State private var dragTranslation: CGFloat = 0
-    @State private var isHorizontalDragActive = false
-    @State private var pagerSettlementID = UUID()
     @State private var midnightWatcherID = UUID()
 
     private var isShowingToday: Bool {
@@ -70,23 +67,20 @@ struct TodayView: View {
     }
 
     private var dayPager: some View {
-        GeometryReader { proxy in
-            let width = max(proxy.size.width, 1)
-            let height = proxy.size.height
-
-            HStack(spacing: 0) {
-                ForEach([-1, 0, 1], id: \.self) { offset in
-                    TodayDoseList(
-                        date: date(forPageOffset: offset)
-                    )
-                    .frame(width: width, height: height)
-                }
+        TodayPageController(
+            store: store,
+            baseDate: selectedDate,
+            onPreviewDate: { date in
+                displayedDate = date
+            },
+            onCancel: {
+                displayedDate = selectedDate
+            },
+            onCommitDate: { date in
+                setSelectedDate(date)
             }
-            .offset(x: -width + dragTranslation)
-            .simultaneousGesture(dayPagerDragGesture(width: width))
-        }
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
     }
 
     private var selectedDateBinding: Binding<Date> {
@@ -102,90 +96,12 @@ struct TodayView: View {
     }
 
     private func setSelectedDate(_ date: Date) {
-        pagerSettlementID = UUID()
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             selectedDate = date
             displayedDate = date
-            dragTranslation = 0
-            isHorizontalDragActive = false
         }
-    }
-
-    private func dayPagerDragGesture(width: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                let translation = value.translation
-                if !isHorizontalDragActive {
-                    guard abs(translation.width) > abs(translation.height) * 1.2 else { return }
-                    isHorizontalDragActive = true
-                    pagerSettlementID = UUID()
-                }
-
-                dragTranslation = min(max(translation.width, -width), width)
-                displayedDate = date(forPageOffset: previewOffset(for: dragTranslation, width: width))
-            }
-            .onEnded { value in
-                guard isHorizontalDragActive else { return }
-                isHorizontalDragActive = false
-
-                let targetOffset = settledPageOffset(for: value, width: width)
-                guard targetOffset != 0 else {
-                    displayedDate = selectedDate
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        dragTranslation = 0
-                    }
-                    return
-                }
-
-                let targetDate = date(forPageOffset: targetOffset)
-                let targetTranslation = targetOffset > 0 ? -width : width
-                let settlementID = UUID()
-                pagerSettlementID = settlementID
-                displayedDate = targetDate
-
-                withAnimation(.easeOut(duration: 0.22)) {
-                    dragTranslation = targetTranslation
-                }
-
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.23) {
-                    guard pagerSettlementID == settlementID else { return }
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        selectedDate = targetDate
-                        displayedDate = targetDate
-                        dragTranslation = 0
-                    }
-                }
-            }
-    }
-
-    private func previewOffset(for translation: CGFloat, width: CGFloat) -> Int {
-        let threshold = width * 0.5
-        if translation <= -threshold {
-            return 1
-        }
-        if translation >= threshold {
-            return -1
-        }
-        return 0
-    }
-
-    private func settledPageOffset(for value: DragGesture.Value, width: CGFloat) -> Int {
-        let threshold = width * 0.35
-        let predictedThreshold = width * 0.55
-        let translation = value.translation.width
-        let predictedTranslation = value.predictedEndTranslation.width
-
-        if translation <= -threshold || predictedTranslation <= -predictedThreshold {
-            return 1
-        }
-        if translation >= threshold || predictedTranslation >= predictedThreshold {
-            return -1
-        }
-        return 0
     }
 
     private func syncToActualToday() {
@@ -219,6 +135,199 @@ struct TodayView: View {
         await MainActor.run {
             syncToActualToday()
             restartMidnightWatcher()
+        }
+    }
+}
+
+private struct TodayPageController: UIViewControllerRepresentable {
+    @ObservedObject var store: MedicationStore
+    var baseDate: Date
+    var onPreviewDate: (Date) -> Void
+    var onCancel: () -> Void
+    var onCommitDate: (Date) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> UIPageViewController {
+        let pageViewController = UIPageViewController(
+            transitionStyle: .scroll,
+            navigationOrientation: .horizontal
+        )
+        pageViewController.dataSource = context.coordinator
+        pageViewController.delegate = context.coordinator
+        pageViewController.view.backgroundColor = .clear
+        context.coordinator.attachScrollDelegate(to: pageViewController)
+        context.coordinator.update(parent: self, in: pageViewController, forceRecenter: true)
+        return pageViewController
+    }
+
+    func updateUIViewController(_ pageViewController: UIPageViewController, context: Context) {
+        context.coordinator.update(parent: self, in: pageViewController, forceRecenter: false)
+    }
+
+    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIScrollViewDelegate {
+        private var parent: TodayPageController
+        private var controllers: [Date: PageHostController] = [:]
+        private var isTransitioning = false
+        private var pendingPreviewDate: Date?
+        private var isShowingPendingPreview = false
+        private var lastBaseDate: Date?
+
+        init(parent: TodayPageController) {
+            self.parent = parent
+        }
+
+        func attachScrollDelegate(to pageViewController: UIPageViewController) {
+            pageViewController.view.subviews
+                .compactMap { $0 as? UIScrollView }
+                .forEach { $0.delegate = self }
+        }
+
+        func update(parent: TodayPageController, in pageViewController: UIPageViewController, forceRecenter: Bool) {
+            let previousBaseDate = lastBaseDate
+            self.parent = parent
+            updateRootViews()
+
+            let baseDateChanged = previousBaseDate.map { !$0.isSameDay(as: parent.baseDate) } ?? true
+            lastBaseDate = parent.baseDate
+
+            guard !isTransitioning else { return }
+            guard forceRecenter || baseDateChanged else { return }
+            if let currentDate = currentDate(in: pageViewController),
+               currentDate.isSameDay(as: parent.baseDate) {
+                return
+            }
+
+            pageViewController.setViewControllers(
+                [controller(for: parent.baseDate)],
+                direction: .forward,
+                animated: false
+            )
+        }
+
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            viewControllerBefore viewController: UIViewController
+        ) -> UIViewController? {
+            guard let date = (viewController as? PageHostController)?.date,
+                  let previousDate = Calendar.current.date(byAdding: .day, value: -1, to: date)
+            else {
+                return nil
+            }
+            return controller(for: previousDate)
+        }
+
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            viewControllerAfter viewController: UIViewController
+        ) -> UIViewController? {
+            guard let date = (viewController as? PageHostController)?.date,
+                  let nextDate = Calendar.current.date(byAdding: .day, value: 1, to: date)
+            else {
+                return nil
+            }
+            return controller(for: nextDate)
+        }
+
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            willTransitionTo pendingViewControllers: [UIViewController]
+        ) {
+            isTransitioning = true
+            guard let date = (pendingViewControllers.first as? PageHostController)?.date else { return }
+            pendingPreviewDate = date
+            isShowingPendingPreview = false
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard isTransitioning, let pendingPreviewDate else { return }
+            let width = scrollView.bounds.width
+            guard width > 0 else { return }
+
+            let progress = abs(scrollView.contentOffset.x - width) / width
+            if progress >= 0.5 {
+                guard !isShowingPendingPreview else { return }
+                isShowingPendingPreview = true
+                parent.onPreviewDate(pendingPreviewDate)
+            } else {
+                guard isShowingPendingPreview else { return }
+                isShowingPendingPreview = false
+                parent.onPreviewDate(parent.baseDate)
+            }
+        }
+
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            didFinishAnimating finished: Bool,
+            previousViewControllers: [UIViewController],
+            transitionCompleted completed: Bool
+        ) {
+            isTransitioning = false
+            pendingPreviewDate = nil
+            isShowingPendingPreview = false
+
+            guard completed, let currentDate = currentDate(in: pageViewController) else {
+                parent.onCancel()
+                return
+            }
+
+            if currentDate.isSameDay(as: parent.baseDate) {
+                parent.onCancel()
+            } else {
+                parent.onCommitDate(currentDate)
+            }
+        }
+
+        private func currentDate(in pageViewController: UIPageViewController) -> Date? {
+            (pageViewController.viewControllers?.first as? PageHostController)?.date
+        }
+
+        private func controller(for date: Date) -> PageHostController {
+            let key = dayKey(for: date)
+            if let controller = controllers[key] {
+                return controller
+            }
+
+            let controller = PageHostController(
+                date: key,
+                rootView: pageView(for: key)
+            )
+            controller.view.backgroundColor = .clear
+            controllers[key] = controller
+            return controller
+        }
+
+        private func updateRootViews() {
+            for (date, controller) in controllers {
+                controller.rootView = pageView(for: date)
+            }
+        }
+
+        private func pageView(for date: Date) -> AnyView {
+            AnyView(
+                TodayDoseList(date: date)
+                    .environmentObject(parent.store)
+            )
+        }
+
+        private func dayKey(for date: Date) -> Date {
+            Calendar.current.startOfDay(for: date)
+        }
+    }
+
+    final class PageHostController: UIHostingController<AnyView> {
+        let date: Date
+
+        init(date: Date, rootView: AnyView) {
+            self.date = date
+            super.init(rootView: rootView)
+        }
+
+        @available(*, unavailable)
+        @MainActor @preconcurrency required dynamic init?(coder aDecoder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
         }
     }
 }
