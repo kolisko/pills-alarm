@@ -12,7 +12,11 @@ struct HistoryView: View {
             AppScreen(title: "Historie") {
                 List {
                     if confirmations.isEmpty {
-                        EmptyStateView(title: "Zatím žádná historie", systemImage: "clock")
+                        CloudBackedEmptyStateView(
+                            loadState: store.loadState,
+                            emptyTitle: "Zatím žádná historie",
+                            systemImage: "clock"
+                        )
                             .listRowBackground(Color.clear)
                     } else {
                         ForEach(confirmations) { item in

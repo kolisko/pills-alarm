@@ -24,6 +24,40 @@ struct EmptyStateView: View {
     }
 }
 
+struct LoadingStateView: View {
+    var title = "Načítám data z iCloudu"
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.vertical, 24)
+    }
+}
+
+struct CloudBackedEmptyStateView: View {
+    var loadState: MedicationStore.LoadState
+    var emptyTitle: String
+    var systemImage: String
+
+    var body: some View {
+        switch loadState {
+        case .idle, .loading:
+            LoadingStateView()
+
+        case .ready:
+            EmptyStateView(title: emptyTitle, systemImage: systemImage)
+
+        case .requiresICloudAccount, .missingGroup, .failed:
+            EmptyView()
+        }
+    }
+}
+
 struct AppScreen<Content: View, Trailing: View>: View {
     var title: String
     var titleColor: Color

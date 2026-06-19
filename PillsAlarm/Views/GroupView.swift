@@ -18,7 +18,9 @@ struct GroupView: View {
                 Form {
                     switch store.loadState {
                     case .loading, .idle:
-                        EmptyView()
+                        Section {
+                            LoadingStateView()
+                        }
 
                     case .failed:
                         EmptyView()

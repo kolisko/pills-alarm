@@ -20,7 +20,11 @@ struct PlanView: View {
                     syncStatusSection
 
                     if store.medicationItems.isEmpty {
-                        EmptyStateView(title: "Zatím není vytvořený žádný plán", systemImage: "calendar.badge.plus")
+                        CloudBackedEmptyStateView(
+                            loadState: store.loadState,
+                            emptyTitle: "Zatím není vytvořený žádný plán",
+                            systemImage: "calendar.badge.plus"
+                        )
                             .listRowBackground(Color.clear)
                     } else {
                         ForEach(store.medicationItems) { item in

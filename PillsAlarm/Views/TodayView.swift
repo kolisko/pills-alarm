@@ -343,7 +343,11 @@ private struct TodayDoseList: View {
     var body: some View {
         List {
             if doses.isEmpty {
-                EmptyStateView(title: "Na tento den nejsou naplánované dávky", systemImage: "pills")
+                CloudBackedEmptyStateView(
+                    loadState: store.loadState,
+                    emptyTitle: "Na tento den nejsou naplánované dávky",
+                    systemImage: "pills"
+                )
                     .listRowBackground(Color.clear)
             } else {
                 ForEach(doses) { dose in
