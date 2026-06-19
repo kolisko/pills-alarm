@@ -111,8 +111,6 @@ extension Date {
         let dayOffset = calendar.dateComponents([.day], from: referenceStart, to: targetStart).day ?? 0
 
         switch dayOffset {
-        case -2:
-            return "Předevčírem"
         case -1:
             return "Včera"
         case 0:
@@ -123,6 +121,25 @@ extension Date {
             return "Pozítří"
         default:
             return formatted(.dateTime.locale(Locale(identifier: "cs_CZ")).weekday(.wide).day().month())
+        }
+    }
+
+    func relativeDayTitle(referenceDate: Date = Date(), calendar: Calendar = .current) -> String {
+        let referenceStart = calendar.startOfDay(for: referenceDate)
+        let targetStart = calendar.startOfDay(for: self)
+        let dayOffset = calendar.dateComponents([.day], from: referenceStart, to: targetStart).day ?? 0
+
+        switch dayOffset {
+        case -1:
+            return "Včera"
+        case 0:
+            return "Dnes"
+        case 1:
+            return "Zítra"
+        case 2:
+            return "Pozítří"
+        default:
+            return formatted(.dateTime.locale(Locale(identifier: "cs_CZ")).weekday(.wide)).capitalized
         }
     }
 

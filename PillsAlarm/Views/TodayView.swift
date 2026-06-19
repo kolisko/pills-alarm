@@ -5,17 +5,20 @@ struct TodayView: View {
     @EnvironmentObject private var store: MedicationStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedDate = Date()
-    @State private var pageOffset = 0
+    @State private var displayedDate = Date()
+    @State private var dragTranslation: CGFloat = 0
+    @State private var isHorizontalDragActive = false
+    @State private var pagerSettlementID = UUID()
     @State private var midnightWatcherID = UUID()
 
     private var isShowingToday: Bool {
-        selectedDate.isSameDay(as: Date())
+        displayedDate.isSameDay(as: Date())
     }
 
     var body: some View {
         NavigationStack {
             AppScreen(
-                title: selectedDate.relativeDayLabel(),
+                title: displayedDate.relativeDayTitle(),
                 titleColor: isShowingToday ? .primary : .teal
             ) {
                 todayHeaderTrailing
@@ -67,24 +70,28 @@ struct TodayView: View {
     }
 
     private var dayPager: some View {
-        TabView(selection: $pageOffset) {
-            ForEach([-1, 0, 1], id: \.self) { offset in
-                TodayDoseList(
-                    date: date(forPageOffset: offset)
-                )
-                    .tag(offset)
+        GeometryReader { proxy in
+            let width = max(proxy.size.width, 1)
+            let height = proxy.size.height
+
+            HStack(spacing: 0) {
+                ForEach([-1, 0, 1], id: \.self) { offset in
+                    TodayDoseList(
+                        date: date(forPageOffset: offset)
+                    )
+                    .frame(width: width, height: height)
+                }
             }
+            .offset(x: -width + dragTranslation)
+            .simultaneousGesture(dayPagerDragGesture(width: width))
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: pageOffset) { _, newOffset in
-            moveSelectedDate(by: newOffset)
-        }
+        .clipped()
     }
 
     private var selectedDateBinding: Binding<Date> {
         Binding {
-            selectedDate
+            displayedDate
         } set: { date in
             setSelectedDate(date)
         }
@@ -95,17 +102,90 @@ struct TodayView: View {
     }
 
     private func setSelectedDate(_ date: Date) {
+        pagerSettlementID = UUID()
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             selectedDate = date
-            pageOffset = 0
+            displayedDate = date
+            dragTranslation = 0
+            isHorizontalDragActive = false
         }
     }
 
-    private func moveSelectedDate(by offset: Int) {
-        guard offset != 0 else { return }
-        setSelectedDate(date(forPageOffset: offset))
+    private func dayPagerDragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                let translation = value.translation
+                if !isHorizontalDragActive {
+                    guard abs(translation.width) > abs(translation.height) * 1.2 else { return }
+                    isHorizontalDragActive = true
+                    pagerSettlementID = UUID()
+                }
+
+                dragTranslation = min(max(translation.width, -width), width)
+                displayedDate = date(forPageOffset: previewOffset(for: dragTranslation, width: width))
+            }
+            .onEnded { value in
+                guard isHorizontalDragActive else { return }
+                isHorizontalDragActive = false
+
+                let targetOffset = settledPageOffset(for: value, width: width)
+                guard targetOffset != 0 else {
+                    displayedDate = selectedDate
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        dragTranslation = 0
+                    }
+                    return
+                }
+
+                let targetDate = date(forPageOffset: targetOffset)
+                let targetTranslation = targetOffset > 0 ? -width : width
+                let settlementID = UUID()
+                pagerSettlementID = settlementID
+                displayedDate = targetDate
+
+                withAnimation(.easeOut(duration: 0.22)) {
+                    dragTranslation = targetTranslation
+                }
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.23) {
+                    guard pagerSettlementID == settlementID else { return }
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        selectedDate = targetDate
+                        displayedDate = targetDate
+                        dragTranslation = 0
+                    }
+                }
+            }
+    }
+
+    private func previewOffset(for translation: CGFloat, width: CGFloat) -> Int {
+        let threshold = width * 0.5
+        if translation <= -threshold {
+            return 1
+        }
+        if translation >= threshold {
+            return -1
+        }
+        return 0
+    }
+
+    private func settledPageOffset(for value: DragGesture.Value, width: CGFloat) -> Int {
+        let threshold = width * 0.35
+        let predictedThreshold = width * 0.55
+        let translation = value.translation.width
+        let predictedTranslation = value.predictedEndTranslation.width
+
+        if translation <= -threshold || predictedTranslation <= -predictedThreshold {
+            return 1
+        }
+        if translation >= threshold || predictedTranslation >= predictedThreshold {
+            return -1
+        }
+        return 0
     }
 
     private func syncToActualToday() {
