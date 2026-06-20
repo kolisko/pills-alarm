@@ -60,17 +60,20 @@ struct CloudBackedEmptyStateView: View {
 
 struct AppScreen<Content: View, Trailing: View>: View {
     var title: String
+    var subtitle: String?
     var titleColor: Color
     private let content: Content
     private let trailing: Trailing
 
     init(
         title: String,
+        subtitle: String? = nil,
         titleColor: Color = .primary,
         @ViewBuilder trailing: () -> Trailing,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
+        self.subtitle = subtitle
         self.titleColor = titleColor
         self.trailing = trailing()
         self.content = content()
@@ -86,13 +89,23 @@ struct AppScreen<Content: View, Trailing: View>: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            Text(title)
-                .font(.largeTitle.bold())
-                .foregroundStyle(titleColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .layoutPriority(0)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            ZStack(alignment: .leading) {
+                Text(title)
+                    .font(.largeTitle.bold())
+                    .foregroundStyle(titleColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .offset(x: 2, y: 21)
+                }
+            }
+            .layoutPriority(0)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             trailing
                 .fixedSize(horizontal: true, vertical: false)
@@ -102,16 +115,18 @@ struct AppScreen<Content: View, Trailing: View>: View {
         .padding(.top, 10)
         .padding(.bottom, 8)
         .background(Color(.systemBackground))
+        .zIndex(1)
     }
 }
 
 extension AppScreen where Trailing == EmptyView {
     init(
         title: String,
+        subtitle: String? = nil,
         titleColor: Color = .primary,
         @ViewBuilder content: () -> Content
     ) {
-        self.init(title: title, titleColor: titleColor, trailing: { EmptyView() }, content: content)
+        self.init(title: title, subtitle: subtitle, titleColor: titleColor, trailing: { EmptyView() }, content: content)
     }
 }
 
@@ -175,6 +190,22 @@ extension Date {
         default:
             return formatted(.dateTime.locale(Locale(identifier: "cs_CZ")).weekday(.wide)).capitalized
         }
+    }
+
+    func relativeWeekdaySubtitle(referenceDate: Date = Date(), calendar: Calendar = .current) -> String? {
+        let referenceStart = calendar.startOfDay(for: referenceDate)
+        let targetStart = calendar.startOfDay(for: self)
+        let dayOffset = calendar.dateComponents([.day], from: referenceStart, to: targetStart).day ?? 0
+
+        guard (-1...2).contains(dayOffset) else { return nil }
+        return czechWeekdayName()
+    }
+
+    private func czechWeekdayName() -> String {
+        let locale = Locale(identifier: "cs_CZ")
+        let name = formatted(.dateTime.locale(locale).weekday(.wide))
+        guard let first = name.first else { return name }
+        return String(first).uppercased(with: locale) + name.dropFirst()
     }
 
     func isSameDay(as other: Date, calendar: Calendar = .current) -> Bool {

@@ -26,6 +26,12 @@ struct SettingsView: View {
                         }
 
                         NavigationLink {
+                            DoseActionSettingsView()
+                        } label: {
+                            SettingsNavigationRow(title: "Podání dávek", systemImage: "checkmark.circle")
+                        }
+
+                        NavigationLink {
                             VersionInfoView()
                         } label: {
                             SettingsNavigationRow(title: "Verze", systemImage: "info.circle")
@@ -319,6 +325,46 @@ private struct AlarmSettingsView: View {
             next[keyPath: keyPath] = value
             scheduler.alarmSettings = next.normalized
             scheduler.rescheduleUpcomingDoses(store: store)
+        }
+    }
+}
+
+private struct DoseActionSettingsView: View {
+    @AppStorage(DoseActionSettings.actionLeadTimeMinutesKey) private var actionLeadTimeMinutes = DoseActionSettings.defaultActionLeadTimeMinutes
+
+    var body: some View {
+        List {
+            Section {
+                Stepper(
+                    "Aktivní od: \(normalizedLeadTimeMinutes) min před dávkou",
+                    value: actionLeadTimeBinding,
+                    in: DoseActionSettings.minimumActionLeadTimeMinutes...DoseActionSettings.maximumActionLeadTimeMinutes,
+                    step: 5
+                )
+            } footer: {
+                Text("Tlačítka Podat a Přeskočit jsou v Dnes aktivní až od tohoto předstihu před plánovaným časem dávky.")
+            }
+
+            Section {
+                Button {
+                    actionLeadTimeMinutes = DoseActionSettings.defaultActionLeadTimeMinutes
+                } label: {
+                    Label("Obnovit výchozí nastavení", systemImage: "arrow.counterclockwise")
+                }
+            }
+        }
+        .navigationTitle("Podání dávek")
+    }
+
+    private var normalizedLeadTimeMinutes: Int {
+        DoseActionSettings.normalizedActionLeadTimeMinutes(actionLeadTimeMinutes)
+    }
+
+    private var actionLeadTimeBinding: Binding<Int> {
+        Binding {
+            normalizedLeadTimeMinutes
+        } set: { value in
+            actionLeadTimeMinutes = DoseActionSettings.normalizedActionLeadTimeMinutes(value)
         }
     }
 }

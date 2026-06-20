@@ -105,6 +105,17 @@ enum SyncSettings {
     }
 }
 
+enum DoseActionSettings {
+    static let actionLeadTimeMinutesKey = "doseAction.actionLeadTimeMinutes.v1"
+    static let defaultActionLeadTimeMinutes = 15
+    static let minimumActionLeadTimeMinutes = 0
+    static let maximumActionLeadTimeMinutes = 240
+
+    static func normalizedActionLeadTimeMinutes(_ value: Int) -> Int {
+        min(max(value, minimumActionLeadTimeMinutes), maximumActionLeadTimeMinutes)
+    }
+}
+
 @main
 struct PillsAlarmApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate

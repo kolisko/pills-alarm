@@ -16,6 +16,7 @@ struct TodayView: View {
         NavigationStack {
             AppScreen(
                 title: displayedDate.relativeDayTitle(),
+                subtitle: displayedDate.relativeWeekdaySubtitle(),
                 titleColor: isShowingToday ? .primary : .teal
             ) {
                 todayHeaderTrailing
@@ -363,6 +364,7 @@ private struct TodayDoseList: View {
 
 private struct DoseRow: View {
     @EnvironmentObject private var store: MedicationStore
+    @AppStorage(DoseActionSettings.actionLeadTimeMinutesKey) private var actionLeadTimeMinutes = DoseActionSettings.defaultActionLeadTimeMinutes
     @State private var showsSkipConfirmation = false
     var dose: GeneratedDose
 
@@ -370,17 +372,30 @@ private struct DoseRow: View {
         store.confirmation(for: dose)
     }
 
-    private var isOverdueToday: Bool {
+    private func isOverdueToday(now: Date) -> Bool {
         confirmation == nil
             && Calendar.current.isDateInToday(dose.scheduledDate)
-            && dose.scheduledDate < Date()
+            && dose.scheduledDate < now
     }
 
     private var isResolved: Bool {
         confirmation != nil
     }
 
+    private func canUseActions(now: Date) -> Bool {
+        let leadTime = DoseActionSettings.normalizedActionLeadTimeMinutes(actionLeadTimeMinutes)
+        let activeFrom = dose.scheduledDate.addingTimeInterval(-Double(leadTime) * 60)
+        return now >= activeFrom
+    }
+
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            rowContent(now: context.date)
+        }
+    }
+
+    @ViewBuilder
+    private func rowContent(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -389,7 +404,7 @@ private struct DoseRow: View {
                         .foregroundStyle(isResolved ? .secondary : .primary)
                     Text(dose.scheduledTime.label)
                         .font(.caption)
-                        .foregroundStyle(isOverdueToday ? .red : .secondary)
+                        .foregroundStyle(isOverdueToday(now: now) ? .red : .secondary)
                 }
                 .frame(width: 72, alignment: .leading)
 
@@ -468,7 +483,7 @@ private struct DoseRow: View {
                             Label("Podat", systemImage: "checkmark.circle.fill")
                         }
                         .buttonStyle(DoseActionButtonStyle(kind: .primary))
-                        .disabled(store.isSyncing)
+                        .disabled(store.isSyncing || !canUseActions(now: now))
 
                         Spacer()
 
@@ -478,7 +493,7 @@ private struct DoseRow: View {
                             Label("Přeskočit", systemImage: "forward.circle")
                         }
                         .buttonStyle(DoseActionButtonStyle(kind: .secondary))
-                        .disabled(store.isSyncing)
+                        .disabled(store.isSyncing || !canUseActions(now: now))
                     }
                 }
             }
