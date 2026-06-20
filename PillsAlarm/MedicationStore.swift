@@ -60,12 +60,11 @@ final class MedicationStore: ObservableObject {
 
     private let cloud: CloudKitRepository
     private let defaults: UserDefaults
+    private let domainState = MedicationDomainStore()
     private var groupRecord: CKRecord?
     private var groupDatabase: CKDatabase?
     private var groupDatabaseScope: CKDatabase.Scope?
     private var workspaceContexts: [String: WorkspaceContext] = [:]
-    private var medicationWorkspaceIds: [UUID: String] = [:]
-    private var confirmationWorkspaceIds: [String: String] = [:]
     private var personalWorkspaceId: String?
     private var ownedGroupWorkspaceId: String?
     private var loadGeneration = 0
@@ -380,9 +379,7 @@ final class MedicationStore: ObservableObject {
     }
 
     func confirmation(for dose: GeneratedDose) -> DoseConfirmation? {
-        confirmations[dose.id]
-            ?? confirmations[dose.baseEventId]
-            ?? confirmationItems.first { Self.matches($0.confirmation, dose: dose) }?.confirmation
+        domainState.confirmation(for: dose)
     }
 
     private func confirmationEventIds(for dose: GeneratedDose, including confirmation: DoseConfirmation? = nil) -> [String] {
@@ -397,7 +394,7 @@ final class MedicationStore: ObservableObject {
     }
 
     func displayName(for confirmation: DoseConfirmation) -> String? {
-        let workspaceId = confirmationWorkspaceIds[confirmation.eventId] ?? personalWorkspaceId
+        let workspaceId = domainState.workspaceId(forConfirmationEventId: confirmation.eventId) ?? personalWorkspaceId
         let member = workspaceId.flatMap { workspaceContexts[$0]?.members.first { $0.id == confirmation.memberId } }
             ?? members.first { $0.id == confirmation.memberId }
         let name = member?.displayName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -437,9 +434,7 @@ final class MedicationStore: ObservableObject {
                 }
             }
             try await cloud.saveConfirmation(confirmation, groupRecord: context.groupRecord, database: context.database)
-            confirmations[confirmation.eventId] = confirmation
-            upsertConfirmationItemLocally(confirmation, source: context.source)
-            confirmationWorkspaceIds[confirmation.eventId] = context.id
+            upsertConfirmationLocally(confirmation, in: context)
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
         } catch {
             recordSyncError(error)
@@ -473,11 +468,7 @@ final class MedicationStore: ObservableObject {
                 try await cloud.deleteConfirmation(eventId: existingConfirmation.eventId, groupRecord: context.groupRecord, database: context.database)
             }
 
-            for eventId in eventIds {
-                confirmations.removeValue(forKey: eventId)
-                confirmationWorkspaceIds.removeValue(forKey: eventId)
-            }
-            confirmationItems.removeAll { eventIds.contains($0.confirmation.eventId) }
+            removeConfirmationsLocally(eventIds: eventIds)
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
         } catch {
             recordSyncError(error)
@@ -533,7 +524,7 @@ final class MedicationStore: ObservableObject {
     }
 
     func deleteMedication(_ medication: Medication) {
-        guard let workspaceId = medicationWorkspaceIds[medication.id],
+        guard let workspaceId = domainState.workspaceId(forMedicationId: medication.id),
               let context = workspaceContexts[workspaceId],
               !context.isShared else {
             return
@@ -607,6 +598,7 @@ final class MedicationStore: ObservableObject {
             let sourceConfirmations = confirmationsForMedication(item.medication.id, in: sourceContext)
             let updatedConfirmations = sourceConfirmations
                 .map { confirmationForSharingChange($0, to: destinationContext) }
+            let updatedConfirmationEventIds = Set(updatedConfirmations.map(\.eventId))
             var medicationForSharingChange = updatedMedication ?? item.medication
             medicationForSharingChange.ownerUserRecordName = medicationForSharingChange.ownerUserRecordName ?? currentUserRecordName
             medicationForSharingChange.sharedGroupId = shouldShare ? destinationContext.id : nil
@@ -615,7 +607,13 @@ final class MedicationStore: ObservableObject {
             for confirmation in updatedConfirmations {
                 try await cloud.saveConfirmation(confirmation, groupRecord: destinationContext.groupRecord, database: destinationContext.database)
             }
-            try await deleteConfirmations(for: item.medication.id, in: sourceContext)
+            if isSameCloudRecordLocation(sourceContext, destinationContext) {
+                for confirmation in sourceConfirmations where !updatedConfirmationEventIds.contains(confirmation.eventId) {
+                    try await cloud.deleteConfirmation(eventId: confirmation.eventId, groupRecord: sourceContext.groupRecord, database: sourceContext.database)
+                }
+            } else {
+                try await deleteConfirmations(for: item.medication.id, in: sourceContext)
+            }
             if !isSameCloudRecordLocation(sourceContext, destinationContext) {
                 try await cloud.deleteMedication(item.medication, groupRecord: sourceContext.groupRecord, database: sourceContext.database)
             }
@@ -835,30 +833,14 @@ final class MedicationStore: ObservableObject {
         groupDatabase = nil
         groupDatabaseScope = nil
         workspaceContexts = [:]
-        medicationWorkspaceIds = [:]
-        confirmationWorkspaceIds = [:]
         personalWorkspaceId = nil
         ownedGroupWorkspaceId = nil
         careGroupName = ""
         members = []
         activeMemberId = nil
-        medications = []
-        medicationItems = []
-        confirmations = [:]
-        confirmationItems = []
+        domainState.reset()
+        publishDomainState()
         sharedWorkspaceProfiles = []
-    }
-
-    private func loadGroupSnapshot() async throws -> CloudSnapshot {
-        workspaceCandidates = []
-
-        if let reference = loadStoredGroupReference(),
-           reference.databaseScope == CKDatabase.Scope.shared.rawValue,
-           let sharedSnapshot = try await cloud.fetchGroupSnapshot(reference: reference) {
-            return sharedSnapshot
-        }
-
-        return try await cloud.ensurePersonalWorkspace()
     }
 
     private func loadWorkspaceSnapshots() async throws -> [CloudSnapshot] {
@@ -904,36 +886,37 @@ final class MedicationStore: ObservableObject {
 
     private func upsertMedicationLocally(_ medication: Medication, source: WorkspaceSource? = nil) {
         let resolvedSource = source
-            ?? medicationWorkspaceIds[medication.id].flatMap { workspaceContexts[$0]?.source }
+            ?? domainState.workspaceId(forMedicationId: medication.id).flatMap { workspaceContexts[$0]?.source }
             ?? personalContext?.source
 
-        if let resolvedSource {
-            let item = MedicationListItem(medication: medication, source: resolvedSource)
-            if let index = medicationItems.firstIndex(where: { $0.id == item.id }) {
-                medicationItems[index] = item
-            } else {
-                medicationItems.append(item)
-            }
-            medicationWorkspaceIds[medication.id] = resolvedSource.id
-        } else {
-            if let index = medications.firstIndex(where: { $0.id == medication.id }) {
-                medications[index] = medication
-            } else {
-                medications.append(medication)
-            }
+        if let resolvedSource,
+           let workspaceId = domainState.workspaceId(forMedicationId: medication.id) ?? personalContext?.id {
+            domainState.upsertMedication(medication, workspaceId: workspaceId, source: resolvedSource)
         }
 
-        sortMedicationViews()
+        publishDomainState()
     }
 
-    private func upsertConfirmationItemLocally(_ confirmation: DoseConfirmation, source: WorkspaceSource) {
-        let item = ConfirmationListItem(confirmation: confirmation, source: source)
-        if let index = confirmationItems.firstIndex(where: { $0.id == item.id }) {
-            confirmationItems[index] = item
-        } else {
-            confirmationItems.append(item)
+    private func publishDomainState() {
+        medications = domainState.medications
+        medicationItems = domainState.medicationItems
+        confirmations = domainState.confirmations
+        confirmationItems = domainState.confirmationItems
+    }
+
+    private func upsertConfirmationLocally(_ confirmation: DoseConfirmation, in context: WorkspaceContext) {
+        domainState.upsertConfirmation(confirmation, workspaceId: context.id, source: source(for: context, medicationId: confirmation.medicationId))
+        workspaceContexts[context.id]?.confirmations.removeAll { $0.eventId == confirmation.eventId }
+        workspaceContexts[context.id]?.confirmations.append(confirmation)
+        publishDomainState()
+    }
+
+    private func removeConfirmationsLocally(eventIds: [String]) {
+        domainState.removeConfirmations(eventIds: eventIds)
+        for contextId in workspaceContexts.keys {
+            workspaceContexts[contextId]?.confirmations.removeAll { eventIds.contains($0.eventId) }
         }
-        confirmationItems.sort { $0.confirmation.timestamp > $1.confirmation.timestamp }
+        publishDomainState()
     }
 
     private func upsertMemberLocally(_ member: CareMember) {
@@ -962,9 +945,9 @@ final class MedicationStore: ObservableObject {
         let canClaimOrphanedPrivateConfirmations = groupDatabaseScope == .private
         var changedConfirmations: [DoseConfirmation] = []
 
-        for confirmation in confirmations.values {
+        for confirmation in domainState.allConfirmations {
             if let personalWorkspaceId,
-               let confirmationWorkspaceId = confirmationWorkspaceIds[confirmation.eventId],
+               let confirmationWorkspaceId = domainState.workspaceId(forConfirmationEventId: confirmation.eventId),
                confirmationWorkspaceId != personalWorkspaceId {
                 continue
             }
@@ -987,9 +970,8 @@ final class MedicationStore: ObservableObject {
 
         for confirmation in changedConfirmations {
             try await cloud.saveConfirmation(confirmation, groupRecord: groupRecord, database: database)
-            confirmations[confirmation.eventId] = confirmation
-            if let source = personalContext?.source {
-                upsertConfirmationItemLocally(confirmation, source: source)
+            if let personalContext {
+                upsertConfirmationLocally(confirmation, in: personalContext)
             }
         }
     }
@@ -1013,25 +995,15 @@ final class MedicationStore: ObservableObject {
         workspaceContexts[destinationContext.id]?.confirmations.removeAll { $0.medicationId == medication.id }
         workspaceContexts[destinationContext.id]?.confirmations.append(contentsOf: updatedConfirmations)
 
-        medicationItems.removeAll { $0.medication.id == medication.id }
         let destinationSource = source(for: destinationContext, medication: medication)
-        medicationItems.append(MedicationListItem(medication: medication, source: destinationSource))
-        medicationWorkspaceIds[medication.id] = destinationContext.id
-
-        for eventId in originalConfirmationEventIds {
-            confirmations.removeValue(forKey: eventId)
-            confirmationWorkspaceIds.removeValue(forKey: eventId)
-        }
-        confirmationItems.removeAll { $0.confirmation.medicationId == medication.id }
-
-        for confirmation in updatedConfirmations {
-            confirmations[confirmation.eventId] = confirmation
-            confirmationWorkspaceIds[confirmation.eventId] = destinationContext.id
-            confirmationItems.append(ConfirmationListItem(confirmation: confirmation, source: destinationSource))
-        }
-
-        sortMedicationViews()
-        confirmationItems.sort { $0.confirmation.timestamp > $1.confirmation.timestamp }
+        domainState.applySharingChange(
+            medication: medication,
+            updatedConfirmations: updatedConfirmations,
+            originalConfirmationEventIds: originalConfirmationEventIds,
+            destinationWorkspaceId: destinationContext.id,
+            destinationSource: destinationSource
+        )
+        publishDomainState()
         refreshSharedWorkspaceProfiles()
     }
 
@@ -1068,41 +1040,37 @@ final class MedicationStore: ObservableObject {
         sortMembers()
         activeMemberId = currentOwnedGroupMember?.id
 
-        medicationWorkspaceIds = [:]
-        confirmationWorkspaceIds = [:]
-        medicationItems = []
-        confirmationItems = []
-        confirmations = [:]
+        domainState.reset()
+        publishDomainState()
+
+        var medicationEntries: [MedicationStateEntry] = []
 
         for context in contexts {
             for medication in context.medications {
                 let source = source(for: context, medication: medication)
-                medicationItems.append(MedicationListItem(medication: medication, source: source))
-                medicationWorkspaceIds[medication.id] = context.id
+                medicationEntries.append(MedicationStateEntry(medication: medication, workspaceId: context.id, source: source))
             }
         }
 
-        let validConfirmationSlots = Set(medicationItems.flatMap { item in
-            item.medication.doseTimes.map { doseTime in
-                Self.confirmationSlotKey(medicationId: item.medication.id, timeId: doseTime.id)
+        let validConfirmationSlots = Set(medicationEntries.flatMap { entry in
+            entry.medication.doseTimes.map { doseTime in
+                Self.confirmationSlotKey(medicationId: entry.medication.id, timeId: doseTime.id)
             }
         })
 
+        var confirmationEntries: [ConfirmationStateEntry] = []
         for context in contexts {
             for confirmation in context.confirmations {
                 guard validConfirmationSlots.contains(Self.confirmationSlotKey(for: confirmation)) else {
                     continue
                 }
                 let source = source(for: context, medicationId: confirmation.medicationId)
-                let item = ConfirmationListItem(confirmation: confirmation, source: source)
-                confirmationItems.append(item)
-                confirmations[confirmation.eventId] = confirmation
-                confirmationWorkspaceIds[confirmation.eventId] = context.id
+                confirmationEntries.append(ConfirmationStateEntry(confirmation: confirmation, workspaceId: context.id, source: source))
             }
         }
+        domainState.replace(medications: medicationEntries, confirmations: confirmationEntries)
+        publishDomainState()
 
-        sortMedicationViews()
-        confirmationItems.sort { $0.confirmation.timestamp > $1.confirmation.timestamp }
         sharedWorkspaceProfiles = contexts
             .filter { $0.isShared }
             .map { context in
@@ -1136,16 +1104,6 @@ final class MedicationStore: ObservableObject {
         }
     }
 
-    private func sortMedicationViews() {
-        medicationItems.sort { lhs, rhs in
-            if lhs.source.isShared != rhs.source.isShared {
-                return !lhs.source.isShared
-            }
-            return lhs.medication.name.localizedCaseInsensitiveCompare(rhs.medication.name) == .orderedAscending
-        }
-        medications = medicationItems.map(\.medication)
-    }
-
     private func targetContext(for medication: Medication) -> WorkspaceContext? {
         if let sharedGroupId = medication.sharedGroupId {
             return workspaceContexts[sharedGroupId]
@@ -1155,7 +1113,7 @@ final class MedicationStore: ObservableObject {
     }
 
     private func confirmationsForMedication(_ medicationId: UUID, in context: WorkspaceContext) -> [DoseConfirmation] {
-        context.confirmations.filter { $0.medicationId == medicationId }
+        domainState.confirmations(forMedicationId: medicationId, in: context.id)
     }
 
     private func deleteConfirmations(for medicationId: UUID, in context: WorkspaceContext) async throws {
@@ -1209,12 +1167,6 @@ final class MedicationStore: ObservableObject {
         "\(medicationId.uuidString)-\(timeId.uuidString)"
     }
 
-    private static func matches(_ confirmation: DoseConfirmation, dose: GeneratedDose) -> Bool {
-        confirmation.medicationId == dose.medicationId
-            && confirmation.timeId == dose.timeId
-            && Calendar.current.isDate(confirmation.scheduledDate, inSameDayAs: dose.scheduledDate)
-    }
-
     private var currentOwnedGroupMember: CareMember? {
         guard let ownedGroupContext else { return nil }
         return currentUserMember(in: ownedGroupContext)
@@ -1235,7 +1187,7 @@ final class MedicationStore: ObservableObject {
             return context
         }
 
-        if let workspaceId = medicationWorkspaceIds[dose.medicationId],
+        if let workspaceId = domainState.workspaceId(forMedicationId: dose.medicationId),
            let context = workspaceContexts[workspaceId] {
             return context
         }
