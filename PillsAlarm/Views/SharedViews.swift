@@ -206,6 +206,8 @@ extension Date {
         let dayOffset = calendar.dateComponents([.day], from: referenceStart, to: targetStart).day ?? 0
 
         switch dayOffset {
+        case -2:
+            return "Předevčírem"
         case -1:
             return "Včera"
         case 0:
@@ -225,6 +227,8 @@ extension Date {
         let dayOffset = calendar.dateComponents([.day], from: referenceStart, to: targetStart).day ?? 0
 
         switch dayOffset {
+        case -2:
+            return "Předevčírem"
         case -1:
             return "Včera"
         case 0:
@@ -243,7 +247,7 @@ extension Date {
         let targetStart = calendar.startOfDay(for: self)
         let dayOffset = calendar.dateComponents([.day], from: referenceStart, to: targetStart).day ?? 0
 
-        guard (-1...2).contains(dayOffset) else { return nil }
+        guard (-2...2).contains(dayOffset) else { return nil }
         return czechWeekdayName()
     }
 
