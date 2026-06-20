@@ -474,13 +474,15 @@ private struct DoseRow: View {
     private func rowContent(now: Date) -> some View {
         let showsMemberWarning = confirmation == nil && !store.canRecordDose(dose)
         let showsActions = canShowActions(now: now)
+        let isLockedFutureDose = confirmation == nil && !canUseActions(now: now)
+        let isSubdued = isResolved || isLockedFutureDose
 
         VStack(alignment: .leading, spacing: showsActions || showsMemberWarning ? 12 : 6) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(dose.timeLabel)
                         .font(.headline)
-                        .foregroundStyle(isResolved ? .secondary : .primary)
+                        .foregroundStyle(isSubdued ? .secondary : .primary)
                     Text(dose.scheduledTime.label)
                         .font(.caption)
                         .foregroundStyle(isOverdueToday(now: now) ? .red : .secondary)
@@ -496,7 +498,7 @@ private struct DoseRow: View {
                         HStack(spacing: 6) {
                             Text(dose.medicationName)
                                 .font(.headline)
-                                .foregroundStyle(isResolved ? .secondary : .primary)
+                                .foregroundStyle(isSubdued ? .secondary : .primary)
                             if dose.isShared {
                                 Image(systemName: "person.2.fill")
                                     .font(.caption.weight(.semibold))
@@ -515,7 +517,11 @@ private struct DoseRow: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    PillAmountVisualization(amount: DoseAmountFormatter.value(from: dose.amount))
+                    PillAmountVisualization(
+                        amount: DoseAmountFormatter.value(from: dose.amount),
+                        isActiveDose: showsActions,
+                        doseColor: isSubdued ? .secondary : .primary
+                    )
                         .accessibilityLabel("Dávka \(dose.amount)")
                 }
                 .accessibilityElement(children: .combine)
@@ -551,7 +557,11 @@ private struct DoseRow: View {
                 }
             }
         }
-        .padding(.vertical, showsActions || showsMemberWarning ? 8 : 4)
+        .padding(.top, 8)
+        .padding(.bottom, showsActions || showsMemberWarning ? 8 : 4)
+        .transaction { transaction in
+            transaction.animation = nil
+        }
         .confirmationDialog(
             "Opravdu přeskočit dávku?",
             isPresented: $showsSkipConfirmation,
@@ -596,9 +606,12 @@ private struct DoseRow: View {
             }
             .accessibilityLabel(confirmation.status.label)
         } else {
-            Image(systemName: "questionmark.circle.fill")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.secondary.opacity(0.55))
+            Circle()
+                .stroke(
+                    Color.secondary.opacity(0.55),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [2, 3])
+                )
+                .frame(width: 17, height: 17)
                 .frame(width: 20, height: 20)
                 .accessibilityLabel("Dávka zatím není aktivní")
         }

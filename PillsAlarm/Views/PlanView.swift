@@ -435,7 +435,8 @@ private struct PillAmountStepIcon: View {
 
 struct PillAmountVisualization: View {
     var amount: Double
-    private let doseColor = Color.secondary
+    var isActiveDose = false
+    var doseColor: Color = .secondary
 
     private var normalizedAmount: Double {
         DoseAmountFormatter.normalized(amount)
@@ -476,6 +477,52 @@ struct PillAmountVisualization: View {
             }
         }
         .frame(height: 32)
+        .modifier(ActiveDoseIconEffect(isActive: isActiveDose))
+    }
+}
+
+private struct ActiveDoseIconEffect: ViewModifier {
+    var isActive: Bool
+    @State private var deactivationStartDate: Date?
+    @State private var deactivationStartPulse = 0.0
+
+    func body(content: Content) -> some View {
+        TimelineView(.animation) { context in
+            let pulse = pulseValue(at: context.date)
+
+            content
+                .scaleEffect(1 + 0.08 * pulse)
+                .opacity(1 - 0.28 * pulse)
+                .shadow(color: Color.teal.opacity(0.22 * pulse), radius: 4, y: 1)
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
+        }
+        .onChange(of: isActive) { _, newValue in
+            if newValue {
+                deactivationStartDate = nil
+                deactivationStartPulse = 0
+            } else {
+                deactivationStartPulse = activePulse(at: Date())
+                deactivationStartDate = Date()
+            }
+        }
+    }
+
+    private func pulseValue(at date: Date) -> Double {
+        if isActive {
+            return activePulse(at: date)
+        }
+
+        guard let deactivationStartDate else { return 0 }
+        let progress = min(max(date.timeIntervalSince(deactivationStartDate) / 0.18, 0), 1)
+        return deactivationStartPulse * (1 - progress)
+    }
+
+    private func activePulse(at date: Date) -> Double {
+        let period = 1.8
+        let progress = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+        return (sin(progress * 2 * .pi - .pi / 2) + 1) / 2
     }
 }
 
