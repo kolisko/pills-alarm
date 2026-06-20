@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct StatusBadge: View {
     var text: String
@@ -25,17 +26,35 @@ struct EmptyStateView: View {
 }
 
 struct LoadingStateView: View {
-    var title = "Načítám data z iCloudu"
-
     var body: some View {
-        HStack(spacing: 12) {
-            ProgressView()
-            Text(title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, 24)
+        RefreshSpinner()
+            .frame(maxWidth: .infinity, minHeight: 420, alignment: .center)
+    }
+}
+
+private struct RefreshSpinner: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        let indicator = UIActivityIndicatorView(style: .large)
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        indicator.hidesWhenStopped = false
+        indicator.startAnimating()
+        container.addSubview(indicator)
+
+        NSLayoutConstraint.activate([
+            indicator.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            indicator.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            indicator.widthAnchor.constraint(equalToConstant: 37),
+            indicator.heightAnchor.constraint(equalToConstant: 37)
+        ])
+
+        return container
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        uiView.subviews
+            .compactMap { $0 as? UIActivityIndicatorView }
+            .forEach { $0.startAnimating() }
     }
 }
 
@@ -62,6 +81,7 @@ struct AppScreen<Content: View, Trailing: View>: View {
     var title: String
     var subtitle: String?
     var titleColor: Color
+    var titleAction: (() -> Void)?
     private let content: Content
     private let trailing: Trailing
 
@@ -69,12 +89,14 @@ struct AppScreen<Content: View, Trailing: View>: View {
         title: String,
         subtitle: String? = nil,
         titleColor: Color = .primary,
+        titleAction: (() -> Void)? = nil,
         @ViewBuilder trailing: () -> Trailing,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.subtitle = subtitle
         self.titleColor = titleColor
+        self.titleAction = titleAction
         self.trailing = trailing()
         self.content = content()
     }
@@ -89,21 +111,7 @@ struct AppScreen<Content: View, Trailing: View>: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            ZStack(alignment: .leading) {
-                Text(title)
-                    .font(.largeTitle.bold())
-                    .foregroundStyle(titleColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .offset(x: 2, y: 21)
-                }
-            }
+            titleBlock
             .layoutPriority(0)
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -117,6 +125,44 @@ struct AppScreen<Content: View, Trailing: View>: View {
         .background(Color(.systemBackground))
         .zIndex(1)
     }
+
+    @ViewBuilder
+    private var titleBlock: some View {
+        if let titleAction {
+            Button(action: titleAction) {
+                titleContent
+            }
+            .buttonStyle(HeaderTitleButtonStyle())
+        } else {
+            titleContent
+        }
+    }
+
+    private var titleContent: some View {
+        ZStack(alignment: .leading) {
+            Text(title)
+                .font(.largeTitle.bold())
+                .foregroundStyle(titleColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .offset(x: 2, y: 21)
+            }
+        }
+    }
+}
+
+private struct HeaderTitleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
 }
 
 extension AppScreen where Trailing == EmptyView {
@@ -126,7 +172,7 @@ extension AppScreen where Trailing == EmptyView {
         titleColor: Color = .primary,
         @ViewBuilder content: () -> Content
     ) {
-        self.init(title: title, subtitle: subtitle, titleColor: titleColor, trailing: { EmptyView() }, content: content)
+        self.init(title: title, subtitle: subtitle, titleColor: titleColor, titleAction: nil, trailing: { EmptyView() }, content: content)
     }
 }
 

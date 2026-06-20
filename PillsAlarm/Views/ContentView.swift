@@ -1,8 +1,10 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @EnvironmentObject private var store: MedicationStore
     @State private var selectedTab: AppTab = .today
+    @State private var todayReturnToTodayTrigger: UUID?
 
     var body: some View {
         Group {
@@ -37,7 +39,12 @@ struct ContentView: View {
 
     private var appTabs: some View {
         TabView(selection: $selectedTab) {
-            TodayView()
+            TodayView(returnToTodayTrigger: todayReturnToTodayTrigger)
+                .background {
+                    TabBarReselectGestureObserver(selectedTab: selectedTab, observedTab: .today) {
+                        todayReturnToTodayTrigger = UUID()
+                    }
+                }
                 .tabItem {
                     Label("Dnes", systemImage: "checklist")
                 }
@@ -83,6 +90,118 @@ private enum AppTab: Hashable {
     case group
     case history
     case settings
+}
+
+private struct TabBarReselectGestureObserver: UIViewControllerRepresentable {
+    var selectedTab: AppTab
+    var observedTab: AppTab
+    var onReselect: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let controller = UIViewController()
+        controller.view.isHidden = true
+        controller.view.isUserInteractionEnabled = false
+
+        context.coordinator.scheduleAttach(from: controller)
+
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.scheduleAttach(from: uiViewController)
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: TabBarReselectGestureObserver
+        private weak var tabBar: UITabBar?
+        private weak var tapRecognizer: UITapGestureRecognizer?
+
+        init(parent: TabBarReselectGestureObserver) {
+            self.parent = parent
+        }
+
+        func scheduleAttach(from viewController: UIViewController, attempts: Int = 8) {
+            DispatchQueue.main.async { [weak self, weak viewController] in
+                guard let self, let viewController else { return }
+                if self.attach(from: viewController) || attempts <= 1 { return }
+                self.scheduleAttach(from: viewController, attempts: attempts - 1)
+            }
+        }
+
+        @discardableResult
+        func attach(from viewController: UIViewController) -> Bool {
+            guard let tabBar = viewController.tabBarController?.tabBar else { return false }
+            guard self.tabBar !== tabBar else { return true }
+
+            if let tapRecognizer {
+                self.tabBar?.removeGestureRecognizer(tapRecognizer)
+            }
+
+            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            tabBar.addGestureRecognizer(recognizer)
+
+            self.tabBar = tabBar
+            self.tapRecognizer = recognizer
+            return true
+        }
+
+        @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended,
+                  parent.selectedTab == parent.observedTab,
+                  let tabBar = recognizer.view as? UITabBar,
+                  let selectedIndex = selectedIndex(in: tabBar, at: recognizer.location(in: tabBar)),
+                  AppTab(tabIndex: selectedIndex) == parent.observedTab
+            else {
+                return
+            }
+
+            parent.onReselect()
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
+        }
+
+        private func selectedIndex(in tabBar: UITabBar, at location: CGPoint) -> Int? {
+            guard let itemCount = tabBar.items?.count, itemCount > 0 else { return nil }
+            let itemWidth = tabBar.bounds.width / CGFloat(itemCount)
+            guard itemWidth > 0 else { return nil }
+
+            let index = Int(location.x / itemWidth)
+            guard index >= 0 && index < itemCount else { return nil }
+            return index
+        }
+    }
+}
+
+private extension AppTab {
+    var tabIndex: Int {
+        switch self {
+        case .today: 0
+        case .plan: 1
+        case .group: 2
+        case .history: 3
+        case .settings: 4
+        }
+    }
+
+    init?(tabIndex: Int) {
+        switch tabIndex {
+        case 0: self = .today
+        case 1: self = .plan
+        case 2: self = .group
+        case 3: self = .history
+        case 4: self = .settings
+        default: return nil
+        }
+    }
 }
 
 private struct SyncOverlay: View {

@@ -4,9 +4,11 @@ import UIKit
 struct TodayView: View {
     @EnvironmentObject private var store: MedicationStore
     @Environment(\.scenePhase) private var scenePhase
+    var returnToTodayTrigger: UUID?
     @State private var selectedDate = Date()
     @State private var displayedDate = Date()
     @State private var midnightWatcherID = UUID()
+    @State private var returnToTodayRequest: TodayPageAnimationRequest?
 
     private var isShowingToday: Bool {
         displayedDate.isSameDay(as: Date())
@@ -17,7 +19,8 @@ struct TodayView: View {
             AppScreen(
                 title: displayedDate.relativeDayTitle(),
                 subtitle: displayedDate.relativeWeekdaySubtitle(),
-                titleColor: isShowingToday ? .primary : .teal
+                titleColor: isShowingToday ? .primary : .teal,
+                titleAction: todayTitleAction
             ) {
                 todayHeaderTrailing
             } content: {
@@ -36,6 +39,9 @@ struct TodayView: View {
                 syncToActualToday()
                 restartMidnightWatcher()
             }
+            .onChange(of: returnToTodayTrigger) {
+                animateToActualToday()
+            }
             .task(id: midnightWatcherID) {
                 await waitForNextMidnight()
             }
@@ -43,36 +49,23 @@ struct TodayView: View {
     }
 
     private var todayHeaderTrailing: some View {
-        HStack(spacing: 8) {
-            if !isShowingToday {
-                Button {
-                    syncToActualToday()
-                } label: {
-                    Label {
-                        Text("Dnes")
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    } icon: {
-                        Image(systemName: "arrow.uturn.backward")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(.teal)
-                .foregroundStyle(.white)
-                .fixedSize(horizontal: true, vertical: false)
-            }
-
-            DatePicker("", selection: selectedDateBinding, displayedComponents: .date)
-                .labelsHidden()
-        }
+        DatePicker("", selection: selectedDateBinding, displayedComponents: .date)
+            .labelsHidden()
         .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var todayTitleAction: (() -> Void)? {
+        guard !isShowingToday else { return nil }
+        return {
+            animateToActualToday()
+        }
     }
 
     private var dayPager: some View {
         TodayPageController(
             store: store,
             baseDate: selectedDate,
+            animationRequest: returnToTodayRequest,
             onPreviewDate: { date in
                 displayedDate = date
             },
@@ -111,6 +104,16 @@ struct TodayView: View {
         setSelectedDate(Date())
     }
 
+    private func animateToActualToday() {
+        let today = Date()
+        guard !displayedDate.isSameDay(as: today) else {
+            syncToActualToday()
+            return
+        }
+
+        returnToTodayRequest = TodayPageAnimationRequest(targetDate: today)
+    }
+
     private func restartMidnightWatcher() {
         midnightWatcherID = UUID()
     }
@@ -142,9 +145,15 @@ struct TodayView: View {
     }
 }
 
+private struct TodayPageAnimationRequest: Equatable {
+    let id = UUID()
+    var targetDate: Date
+}
+
 private struct TodayPageController: UIViewControllerRepresentable {
     @ObservedObject var store: MedicationStore
     var baseDate: Date
+    var animationRequest: TodayPageAnimationRequest?
     var onPreviewDate: (Date) -> Void
     var onCancel: () -> Void
     var onCommitDate: (Date) -> Void
@@ -176,7 +185,9 @@ private struct TodayPageController: UIViewControllerRepresentable {
         private var isTransitioning = false
         private var pendingPreviewDate: Date?
         private var isShowingPendingPreview = false
+        private var isProgrammaticTransition = false
         private var lastBaseDate: Date?
+        private var handledAnimationRequestID: UUID?
 
         init(parent: TodayPageController) {
             self.parent = parent
@@ -195,6 +206,10 @@ private struct TodayPageController: UIViewControllerRepresentable {
 
             let baseDateChanged = previousBaseDate.map { !$0.isSameDay(as: parent.baseDate) } ?? true
             lastBaseDate = parent.baseDate
+
+            if handleAnimationRequest(in: pageViewController) {
+                return
+            }
 
             guard !isTransitioning else { return }
             guard forceRecenter || baseDateChanged else { return }
@@ -245,7 +260,7 @@ private struct TodayPageController: UIViewControllerRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard isTransitioning, let pendingPreviewDate else { return }
+            guard isTransitioning, !isProgrammaticTransition, let pendingPreviewDate else { return }
             let width = scrollView.bounds.width
             guard width > 0 else { return }
 
@@ -267,6 +282,7 @@ private struct TodayPageController: UIViewControllerRepresentable {
             previousViewControllers: [UIViewController],
             transitionCompleted completed: Bool
         ) {
+            guard !isProgrammaticTransition else { return }
             isTransitioning = false
             pendingPreviewDate = nil
             isShowingPendingPreview = false
@@ -280,6 +296,56 @@ private struct TodayPageController: UIViewControllerRepresentable {
                 parent.onCancel()
             } else {
                 parent.onCommitDate(currentDate)
+            }
+        }
+
+        private func handleAnimationRequest(in pageViewController: UIPageViewController) -> Bool {
+            guard let request = parent.animationRequest,
+                  handledAnimationRequestID != request.id else {
+                return false
+            }
+
+            guard !isTransitioning else {
+                return true
+            }
+
+            handledAnimationRequestID = request.id
+            animate(to: request.targetDate, in: pageViewController)
+            return true
+        }
+
+        private func animate(to targetDate: Date, in pageViewController: UIPageViewController) {
+            let targetDate = dayKey(for: targetDate)
+            let currentDate = currentDate(in: pageViewController).map(dayKey(for:)) ?? dayKey(for: parent.baseDate)
+
+            guard !currentDate.isSameDay(as: targetDate) else {
+                parent.onCommitDate(targetDate)
+                return
+            }
+
+            let direction: UIPageViewController.NavigationDirection = targetDate < currentDate ? .reverse : .forward
+            isTransitioning = true
+            isProgrammaticTransition = true
+            pendingPreviewDate = targetDate
+            isShowingPendingPreview = true
+            parent.onPreviewDate(targetDate)
+
+            pageViewController.setViewControllers(
+                [controller(for: targetDate)],
+                direction: direction,
+                animated: true
+            ) { [weak self] completed in
+                guard let self else { return }
+                self.isTransitioning = false
+                self.isProgrammaticTransition = false
+                self.pendingPreviewDate = nil
+                self.isShowingPendingPreview = false
+
+                if completed {
+                    self.parent.onCommitDate(targetDate)
+                } else {
+                    self.parent.onCancel()
+                }
             }
         }
 
