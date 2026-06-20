@@ -56,8 +56,10 @@ struct TodayView: View {
                         Image(systemName: "arrow.uturn.backward")
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .tint(.teal)
+                .foregroundStyle(.white)
                 .fixedSize(horizontal: true, vertical: false)
             }
 
@@ -366,6 +368,8 @@ private struct DoseRow: View {
     @EnvironmentObject private var store: MedicationStore
     @AppStorage(DoseActionSettings.actionLeadTimeMinutesKey) private var actionLeadTimeMinutes = DoseActionSettings.defaultActionLeadTimeMinutes
     @State private var showsSkipConfirmation = false
+    @State private var showsUndoConfirmation = false
+    @State private var showsStatusDetails = false
     var dose: GeneratedDose
 
     private var confirmation: DoseConfirmation? {
@@ -388,6 +392,12 @@ private struct DoseRow: View {
         return now >= activeFrom
     }
 
+    private func canShowActions(now: Date) -> Bool {
+        confirmation == nil
+            && store.canRecordDose(dose)
+            && canUseActions(now: now)
+    }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             rowContent(now: context.date)
@@ -396,7 +406,10 @@ private struct DoseRow: View {
 
     @ViewBuilder
     private func rowContent(now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let showsMemberWarning = confirmation == nil && !store.canRecordDose(dose)
+        let showsActions = canShowActions(now: now)
+
+        VStack(alignment: .leading, spacing: showsActions || showsMemberWarning ? 12 : 6) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(dose.timeLabel)
@@ -405,6 +418,10 @@ private struct DoseRow: View {
                     Text(dose.scheduledTime.label)
                         .font(.caption)
                         .foregroundStyle(isOverdueToday(now: now) ? .red : .secondary)
+                    if !showsActions && !showsMemberWarning {
+                        doseStateIndicator
+                            .padding(.top, 2)
+                    }
                 }
                 .frame(width: 72, alignment: .leading)
 
@@ -440,65 +457,35 @@ private struct DoseRow: View {
                 Spacer()
             }
 
-            if let confirmation {
+            if showsMemberWarning {
+                Label("Nejdřív vyplň svoje jméno ve Skupině.", systemImage: "person.crop.circle.badge.exclamationmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+            } else if showsActions {
                 HStack {
-                    let memberName = store.displayName(for: confirmation)
-                    let statusText = memberName.map {
-                        confirmation.status == .confirmed ? "Podáno: \($0)" : "Přeskočil/a: \($0)"
-                    } ?? confirmation.status.label
-                    StatusBadge(
-                        text: statusText,
-                        systemImage: confirmation.status == .confirmed ? "checkmark.circle.fill" : "forward.circle.fill",
-                        tint: confirmation.status == .confirmed ? .green : .secondary
-                    )
-                    Text(confirmation.timestamp.shortTimeLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
                     Button {
                         Task {
-                            try? await store.undoConfirmation(for: dose)
+                            try? await store.confirm(dose, status: .confirmed)
                         }
                     } label: {
-                        Text("Zpět")
-                            .font(.caption)
-                            .underline()
+                        Label("Podat", systemImage: "checkmark.circle.fill")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .buttonStyle(DoseActionButtonStyle(kind: .primary))
                     .disabled(store.isSyncing)
-                }
-            } else {
-                if !store.canRecordDose(dose) {
-                    Label("Nejdřív vyplň svoje jméno ve Skupině.", systemImage: "person.crop.circle.badge.exclamationmark")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
-                } else {
-                    HStack {
-                        Button {
-                            Task {
-                                try? await store.confirm(dose, status: .confirmed)
-                            }
-                        } label: {
-                            Label("Podat", systemImage: "checkmark.circle.fill")
-                        }
-                        .buttonStyle(DoseActionButtonStyle(kind: .primary))
-                        .disabled(store.isSyncing || !canUseActions(now: now))
 
-                        Spacer()
+                    Spacer()
 
-                        Button {
-                            showsSkipConfirmation = true
-                        } label: {
-                            Label("Přeskočit", systemImage: "forward.circle")
-                        }
-                        .buttonStyle(DoseActionButtonStyle(kind: .secondary))
-                        .disabled(store.isSyncing || !canUseActions(now: now))
+                    Button {
+                        showsSkipConfirmation = true
+                    } label: {
+                        Label("Přeskočit", systemImage: "forward.circle")
                     }
+                    .buttonStyle(DoseActionButtonStyle(kind: .secondary))
+                    .disabled(store.isSyncing)
                 }
             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, showsActions || showsMemberWarning ? 8 : 4)
         .confirmationDialog(
             "Opravdu přeskočit dávku?",
             isPresented: $showsSkipConfirmation,
@@ -511,6 +498,73 @@ private struct DoseRow: View {
             }
             Button("Zrušit", role: .cancel) {}
         }
+        .confirmationDialog(
+            "Opravdu vrátit stav dávky?",
+            isPresented: $showsUndoConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Vrátit stav dávky", role: .destructive) {
+                Task {
+                    try? await store.undoConfirmation(for: dose)
+                }
+            }
+            Button("Zrušit", role: .cancel) {}
+        }
+    }
+
+    @ViewBuilder
+    private var doseStateIndicator: some View {
+        if let confirmation {
+            Button {
+                showsStatusDetails = true
+            } label: {
+                Image(systemName: confirmation.status == .confirmed ? "checkmark.circle.fill" : "forward.circle.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(confirmation.status == .confirmed ? .green : .secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showsStatusDetails) {
+                confirmationPopover(confirmation)
+            }
+            .accessibilityLabel(confirmation.status.label)
+        } else {
+            Image(systemName: "questionmark.circle.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary.opacity(0.55))
+                .frame(width: 20, height: 20)
+                .accessibilityLabel("Dávka zatím není aktivní")
+        }
+    }
+
+    private func confirmationPopover(_ confirmation: DoseConfirmation) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(
+                confirmation.status.label,
+                systemImage: confirmation.status == .confirmed ? "checkmark.circle.fill" : "forward.circle.fill"
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(confirmation.status == .confirmed ? .green : .secondary)
+
+            Text("\(store.displayName(for: confirmation) ?? "Neznámý člen") v \(confirmation.timestamp.shortTimeLabel)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Button {
+                showsStatusDetails = false
+                showsUndoConfirmation = true
+            } label: {
+                Text(confirmation.status == .confirmed ? "Zrušit podání" : "Zrušit přeskočení")
+                    .font(.caption)
+                    .underline()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(store.isSyncing)
+        }
+        .padding(14)
+        .presentationCompactAdaptation(.popover)
     }
 }
 
