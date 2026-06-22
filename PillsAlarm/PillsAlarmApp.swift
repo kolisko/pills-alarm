@@ -1,5 +1,6 @@
 import Network
 import SwiftUI
+import PillCore
 
 final class NetworkStatusMonitor: ObservableObject, @unchecked Sendable {
     @Published private(set) var isConnected = true
@@ -102,17 +103,6 @@ enum SyncSettings {
 
     static func normalizedAutoRefreshIntervalMinutes(_ value: Int) -> Int {
         min(max(value, minimumAutoRefreshIntervalMinutes), maximumAutoRefreshIntervalMinutes)
-    }
-}
-
-enum DoseActionSettings {
-    static let actionLeadTimeMinutesKey = "doseAction.actionLeadTimeMinutes.v1"
-    static let defaultActionLeadTimeMinutes = 15
-    static let minimumActionLeadTimeMinutes = 0
-    static let maximumActionLeadTimeMinutes = 240
-
-    static func normalizedActionLeadTimeMinutes(_ value: Int) -> Int {
-        min(max(value, minimumActionLeadTimeMinutes), maximumActionLeadTimeMinutes)
     }
 }
 

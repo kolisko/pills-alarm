@@ -1,6 +1,7 @@
 import CloudKit
 import Foundation
 import SwiftUI
+import PillCore
 
 #if DEBUG && targetEnvironment(simulator)
 

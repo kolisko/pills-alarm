@@ -1,7 +1,7 @@
 import Foundation
 
-enum ScheduleEngine {
-    static func doses(on date: Date, medications: [Medication], calendar: Calendar = .current) -> [GeneratedDose] {
+public enum ScheduleEngine {
+    public static func doses(on date: Date, medications: [Medication], calendar: Calendar = .current) -> [GeneratedDose] {
         medications.flatMap { medication in
             doses(on: date, medication: medication, calendar: calendar)
         }
@@ -13,7 +13,7 @@ enum ScheduleEngine {
         }
     }
 
-    static func doses(
+    public static func doses(
         on date: Date,
         medication: Medication,
         workspaceId: String = "",
@@ -63,7 +63,7 @@ enum ScheduleEngine {
         }
     }
 
-    static func eventId(medicationId: UUID, timeId: UUID, scheduledDate: Date, calendar: Calendar = .current) -> String {
+    public static func eventId(medicationId: UUID, timeId: UUID, scheduledDate: Date, calendar: Calendar = .current) -> String {
         let components = calendar.dateComponents([.year, .month, .day], from: scheduledDate)
         let year = components.year ?? 0
         let month = components.month ?? 0

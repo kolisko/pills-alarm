@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import PillCore
 
 struct TodayView: View {
     @EnvironmentObject private var store: MedicationStore
@@ -442,28 +443,6 @@ private struct DoseRow: View {
         store.confirmation(for: dose)
     }
 
-    private func isOverdueToday(now: Date) -> Bool {
-        confirmation == nil
-            && Calendar.current.isDateInToday(dose.scheduledDate)
-            && dose.scheduledDate < now
-    }
-
-    private var isResolved: Bool {
-        confirmation != nil
-    }
-
-    private func canUseActions(now: Date) -> Bool {
-        let leadTime = DoseActionSettings.normalizedActionLeadTimeMinutes(actionLeadTimeMinutes)
-        let activeFrom = dose.scheduledDate.addingTimeInterval(-Double(leadTime) * 60)
-        return now >= activeFrom
-    }
-
-    private func canShowActions(now: Date) -> Bool {
-        confirmation == nil
-            && store.canRecordDose(dose)
-            && canUseActions(now: now)
-    }
-
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             rowContent(now: context.date)
@@ -472,21 +451,24 @@ private struct DoseRow: View {
 
     @ViewBuilder
     private func rowContent(now: Date) -> some View {
-        let showsMemberWarning = confirmation == nil && !store.canRecordDose(dose)
-        let showsActions = canShowActions(now: now)
-        let isLockedFutureDose = confirmation == nil && !canUseActions(now: now)
-        let isSubdued = isResolved || isLockedFutureDose
+        let state = DoseBusinessRules.presentationState(
+            for: dose,
+            confirmation: confirmation,
+            canRecordDose: store.canRecordDose(dose),
+            now: now,
+            actionLeadTimeMinutes: actionLeadTimeMinutes
+        )
 
-        VStack(alignment: .leading, spacing: showsActions || showsMemberWarning ? 12 : 6) {
+        VStack(alignment: .leading, spacing: state.showsActions || state.showsMemberWarning ? 12 : 6) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(dose.timeLabel)
                         .font(.headline)
-                        .foregroundStyle(isSubdued ? .secondary : .primary)
+                        .foregroundStyle(state.isSubdued ? .secondary : .primary)
                     Text(dose.scheduledTime.label)
                         .font(.caption)
-                        .foregroundStyle(isOverdueToday(now: now) ? .red : .secondary)
-                    if !showsActions && !showsMemberWarning {
+                        .foregroundStyle(state.isOverdueToday ? .red : .secondary)
+                    if !state.showsActions && !state.showsMemberWarning {
                         doseStateIndicator
                             .padding(.top, 2)
                     }
@@ -498,7 +480,7 @@ private struct DoseRow: View {
                         HStack(spacing: 6) {
                             Text(dose.medicationName)
                                 .font(.headline)
-                                .foregroundStyle(isSubdued ? .secondary : .primary)
+                                .foregroundStyle(state.isSubdued ? .secondary : .primary)
                             if dose.isShared {
                                 Image(systemName: "person.2.fill")
                                     .font(.caption.weight(.semibold))
@@ -519,8 +501,8 @@ private struct DoseRow: View {
 
                     PillAmountVisualization(
                         amount: DoseAmountFormatter.value(from: dose.amount),
-                        isActiveDose: showsActions,
-                        doseColor: isSubdued ? .secondary : .primary
+                        isActiveDose: state.showsActions,
+                        doseColor: state.isSubdued ? .secondary : .primary
                     )
                         .accessibilityLabel("Dávka \(dose.amount)")
                 }
@@ -529,11 +511,11 @@ private struct DoseRow: View {
                 Spacer()
             }
 
-            if showsMemberWarning {
+            if state.showsMemberWarning {
                 Label("Nejdřív vyplň svoje jméno ve Skupině.", systemImage: "person.crop.circle.badge.exclamationmark")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.orange)
-            } else if showsActions {
+            } else if state.showsActions {
                 HStack {
                     Button {
                         Task {
@@ -558,7 +540,7 @@ private struct DoseRow: View {
             }
         }
         .padding(.top, 8)
-        .padding(.bottom, showsActions || showsMemberWarning ? 8 : 4)
+        .padding(.bottom, state.showsActions || state.showsMemberWarning ? 8 : 4)
         .transaction { transaction in
             transaction.animation = nil
         }

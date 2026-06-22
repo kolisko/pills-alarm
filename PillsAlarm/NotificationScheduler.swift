@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import UserNotifications
+import PillCore
 
 @MainActor
 final class NotificationScheduler: ObservableObject {
@@ -21,8 +22,6 @@ final class NotificationScheduler: ObservableObject {
     private static let maxPendingRequests = 60
     static let doseAlarmSoundName = "DoseAlarm.wav"
     static let doseAlarmDurationSeconds = 30
-    private static let scheduleHorizonDays = 7
-    private static let scheduleLookbackDays = 1
     private static let alarmSettingsKey = "alarmSettings.v1"
 
     private init() {
@@ -95,42 +94,15 @@ final class NotificationScheduler: ObservableObject {
 
     private func makeUpcomingDoseRequests(store: MedicationStore) -> [UNNotificationRequest] {
         let calendar = Calendar.current
-        let now = Date()
-        let settings = alarmSettings
-        let repeatOffsets = settings.repeatOffsetsMinutes
-        var schedulableDoses: [GeneratedDose] = []
-
-        for dayOffset in -Self.scheduleLookbackDays..<Self.scheduleHorizonDays {
-            guard let date = calendar.date(byAdding: .day, value: dayOffset, to: now) else { continue }
-            let doses = store.doses(on: date)
-            for dose in doses where store.confirmation(for: dose) == nil {
-                let hasFutureAlarm = repeatOffsets.contains { offset in
-                    guard let scheduledDate = calendar.date(byAdding: .minute, value: offset, to: dose.scheduledDate) else {
-                        return false
-                    }
-
-                    return scheduledDate > now
-                }
-
-                if hasFutureAlarm {
-                    schedulableDoses.append(dose)
-                }
-            }
-        }
-
-        schedulableDoses.sort { $0.scheduledDate < $1.scheduledDate }
-        let repeatingDoseIds = Set(schedulableDoses.prefix(settings.repeatingDoseLimit).map(\.id))
-
-        return schedulableDoses.flatMap { dose in
-            let offsets = repeatingDoseIds.contains(dose.id) ? repeatOffsets : [0]
-            return offsets.enumerated().compactMap { index, offset -> UNNotificationRequest? in
-                guard let scheduledDate = calendar.date(byAdding: .minute, value: offset, to: dose.scheduledDate),
-                      scheduledDate > now else {
-                    return nil
-                }
-
-                return Self.notificationRequest(for: dose, scheduledDate: scheduledDate, repeatIndex: index, calendar: calendar)
-            }
+        return AlarmSchedulingRules.upcomingAlarms(
+            now: Date(),
+            settings: alarmSettings,
+            dosesForDate: { store.doses(on: $0) },
+            confirmationForDose: { store.confirmation(for: $0) },
+            calendar: calendar
+        )
+        .map { alarm in
+            Self.notificationRequest(for: alarm.dose, scheduledDate: alarm.scheduledDate, repeatIndex: alarm.repeatIndex, calendar: calendar)
         }
         .sorted { lhs, rhs in
             guard let leftDate = (lhs.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate(),
@@ -182,29 +154,4 @@ struct ScheduledAlarmInfo: Identifiable, Hashable {
     var title: String
     var body: String
     var scheduledDate: Date
-}
-
-struct AlarmSettings: Codable, Equatable {
-    var repeatIntervalMinutes: Int
-    var repeatDurationMinutes: Int
-    var repeatingDoseLimit: Int
-
-    static let defaultValue = AlarmSettings(
-        repeatIntervalMinutes: 15,
-        repeatDurationMinutes: 120,
-        repeatingDoseLimit: 2
-    )
-
-    var repeatOffsetsMinutes: [Int] {
-        guard repeatIntervalMinutes > 0 else { return [0] }
-        return Array(stride(from: 0, through: repeatDurationMinutes, by: repeatIntervalMinutes))
-    }
-
-    var normalized: AlarmSettings {
-        AlarmSettings(
-            repeatIntervalMinutes: min(max(repeatIntervalMinutes, 5), 60),
-            repeatDurationMinutes: min(max(repeatDurationMinutes, 15), 240),
-            repeatingDoseLimit: min(max(repeatingDoseLimit, 1), 5)
-        )
-    }
 }

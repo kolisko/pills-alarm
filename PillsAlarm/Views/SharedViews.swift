@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import PillCore
 
 struct StatusBadge: View {
     var text: String

@@ -1,12 +1,12 @@
 import Foundation
 
-struct CareMember: Identifiable, Codable, Hashable {
-    var id: UUID
-    var displayName: String
-    var colorHex: String
-    var userRecordName: String?
+public struct CareMember: Identifiable, Codable, Hashable, Sendable {
+    public var id: UUID
+    public var displayName: String
+    public var colorHex: String
+    public var userRecordName: String?
 
-    init(id: UUID = UUID(), displayName: String, colorHex: String, userRecordName: String? = nil) {
+    public init(id: UUID = UUID(), displayName: String, colorHex: String, userRecordName: String? = nil) {
         self.id = id
         self.displayName = displayName
         self.colorHex = colorHex
@@ -14,53 +14,58 @@ struct CareMember: Identifiable, Codable, Hashable {
     }
 }
 
-struct TimeOfDay: Codable, Hashable, Comparable {
-    var hour: Int
-    var minute: Int
+public struct TimeOfDay: Codable, Hashable, Comparable, Sendable {
+    public var hour: Int
+    public var minute: Int
 
-    var label: String {
+    public init(hour: Int, minute: Int) {
+        self.hour = hour
+        self.minute = minute
+    }
+
+    public var label: String {
         String(format: "%02d:%02d", hour, minute)
     }
 
-    static func < (lhs: TimeOfDay, rhs: TimeOfDay) -> Bool {
+    public static func < (lhs: TimeOfDay, rhs: TimeOfDay) -> Bool {
         lhs.hour == rhs.hour ? lhs.minute < rhs.minute : lhs.hour < rhs.hour
     }
 }
 
-struct DoseTime: Identifiable, Codable, Hashable {
-    var id: UUID
-    var label: String
-    var time: TimeOfDay
+public struct DoseTime: Identifiable, Codable, Hashable, Sendable {
+    public var id: UUID
+    public var label: String
+    public var time: TimeOfDay
 
-    init(id: UUID = UUID(), label: String, time: TimeOfDay) {
+    public init(id: UUID = UUID(), label: String, time: TimeOfDay) {
         self.id = id
         self.label = label
         self.time = time
     }
 }
 
-struct DoseEntry: Identifiable, Codable, Hashable {
-    var id: UUID
-    var timeId: UUID
-    var amount: Double
+public struct DoseEntry: Identifiable, Codable, Hashable, Sendable {
+    public var id: UUID
+    public var timeId: UUID
+    public var amount: Double
 
-    init(id: UUID = UUID(), timeId: UUID, amount: Double) {
+    public init(id: UUID = UUID(), timeId: UUID, amount: Double) {
         self.id = id
         self.timeId = timeId
         self.amount = DoseAmountFormatter.normalized(amount)
     }
 
-    init(id: UUID = UUID(), timeId: UUID, amount: String) {
+    public init(id: UUID = UUID(), timeId: UUID, amount: String) {
         self.init(id: id, timeId: timeId, amount: DoseAmountFormatter.value(from: amount))
     }
 
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey, Sendable {
         case id
         case timeId
         case amount
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         timeId = try container.decode(UUID.self, forKey: .timeId)
@@ -73,7 +78,7 @@ struct DoseEntry: Identifiable, Codable, Hashable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(timeId, forKey: .timeId)
@@ -81,13 +86,13 @@ struct DoseEntry: Identifiable, Codable, Hashable {
     }
 }
 
-struct PlanPhase: Identifiable, Codable, Hashable {
-    var id: UUID
-    var title: String
-    var durationDays: Int?
-    var doses: [DoseEntry]
+public struct PlanPhase: Identifiable, Codable, Hashable, Sendable {
+    public var id: UUID
+    public var title: String
+    public var durationDays: Int?
+    public var doses: [DoseEntry]
 
-    init(id: UUID = UUID(), title: String, durationDays: Int?, doses: [DoseEntry]) {
+    public init(id: UUID = UUID(), title: String, durationDays: Int?, doses: [DoseEntry]) {
         self.id = id
         self.title = title
         self.durationDays = durationDays
@@ -95,22 +100,22 @@ struct PlanPhase: Identifiable, Codable, Hashable {
     }
 }
 
-struct Medication: Identifiable, Codable, Hashable {
-    var id: UUID
-    var name: String
-    var note: String
-    var colorHex: String
-    var startDate: Date
-    var doseTimes: [DoseTime]
-    var phases: [PlanPhase]
-    var ownerUserRecordName: String?
-    var sharedGroupId: String?
+public struct Medication: Identifiable, Codable, Hashable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var note: String
+    public var colorHex: String
+    public var startDate: Date
+    public var doseTimes: [DoseTime]
+    public var phases: [PlanPhase]
+    public var ownerUserRecordName: String?
+    public var sharedGroupId: String?
 
-    var isSharedWithGroup: Bool {
+    public var isSharedWithGroup: Bool {
         sharedGroupId != nil
     }
 
-    init(
+    public init(
         id: UUID = UUID(),
         name: String,
         note: String,
@@ -132,7 +137,7 @@ struct Medication: Identifiable, Codable, Hashable {
         self.sharedGroupId = sharedGroupId
     }
 
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey, Sendable {
         case id
         case name
         case note
@@ -144,7 +149,7 @@ struct Medication: Identifiable, Codable, Hashable {
         case sharedGroupId
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
@@ -158,11 +163,11 @@ struct Medication: Identifiable, Codable, Hashable {
     }
 }
 
-enum DoseStatus: String, Codable, CaseIterable {
+public enum DoseStatus: String, Codable, CaseIterable, Sendable {
     case confirmed
     case skipped
 
-    var label: String {
+    public var label: String {
         switch self {
         case .confirmed: "Podáno"
         case .skipped: "Přeskočeno"
@@ -170,45 +175,103 @@ enum DoseStatus: String, Codable, CaseIterable {
     }
 }
 
-struct DoseConfirmation: Identifiable, Codable, Hashable {
-    var id: String { eventId }
-    var eventId: String
-    var medicationId: UUID
-    var timeId: UUID
-    var scheduledDate: Date
-    var amount: String
-    var status: DoseStatus
-    var memberId: UUID
-    var memberName: String
-    var timestamp: Date
-    var note: String
+public struct DoseConfirmation: Identifiable, Codable, Hashable, Sendable {
+    public var id: String { eventId }
+    public var eventId: String
+    public var medicationId: UUID
+    public var timeId: UUID
+    public var scheduledDate: Date
+    public var amount: String
+    public var status: DoseStatus
+    public var memberId: UUID
+    public var memberName: String
+    public var timestamp: Date
+    public var note: String
+
+    public init(
+        eventId: String,
+        medicationId: UUID,
+        timeId: UUID,
+        scheduledDate: Date,
+        amount: String,
+        status: DoseStatus,
+        memberId: UUID,
+        memberName: String,
+        timestamp: Date,
+        note: String
+    ) {
+        self.eventId = eventId
+        self.medicationId = medicationId
+        self.timeId = timeId
+        self.scheduledDate = scheduledDate
+        self.amount = amount
+        self.status = status
+        self.memberId = memberId
+        self.memberName = memberName
+        self.timestamp = timestamp
+        self.note = note
+    }
 }
 
-struct GeneratedDose: Identifiable, Hashable {
-    var id: String
-    var baseEventId: String
-    var workspaceId: String
-    var isShared: Bool
-    var workspaceName: String
-    var medicationId: UUID
-    var medicationName: String
-    var medicationNote: String
-    var medicationColorHex: String
-    var timeId: UUID
-    var timeLabel: String
-    var scheduledDate: Date
-    var scheduledTime: TimeOfDay
-    var amount: String
-    var phaseTitle: String
+public struct GeneratedDose: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var baseEventId: String
+    public var workspaceId: String
+    public var isShared: Bool
+    public var workspaceName: String
+    public var medicationId: UUID
+    public var medicationName: String
+    public var medicationNote: String
+    public var medicationColorHex: String
+    public var timeId: UUID
+    public var timeLabel: String
+    public var scheduledDate: Date
+    public var scheduledTime: TimeOfDay
+    public var amount: String
+    public var phaseTitle: String
+
+    public init(
+        id: String,
+        baseEventId: String,
+        workspaceId: String,
+        isShared: Bool,
+        workspaceName: String,
+        medicationId: UUID,
+        medicationName: String,
+        medicationNote: String,
+        medicationColorHex: String,
+        timeId: UUID,
+        timeLabel: String,
+        scheduledDate: Date,
+        scheduledTime: TimeOfDay,
+        amount: String,
+        phaseTitle: String
+    ) {
+        self.id = id
+        self.baseEventId = baseEventId
+        self.workspaceId = workspaceId
+        self.isShared = isShared
+        self.workspaceName = workspaceName
+        self.medicationId = medicationId
+        self.medicationName = medicationName
+        self.medicationNote = medicationNote
+        self.medicationColorHex = medicationColorHex
+        self.timeId = timeId
+        self.timeLabel = timeLabel
+        self.scheduledDate = scheduledDate
+        self.scheduledTime = scheduledTime
+        self.amount = amount
+        self.phaseTitle = phaseTitle
+    }
 }
 
-enum DoseAmountFormatter {
-    static func normalized(_ value: Double) -> Double {
+public enum DoseAmountFormatter {
+    public static func normalized(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         return max(0, (value * 4).rounded() / 4)
     }
 
-    static func value(from text: String) -> Double {
+    public static func value(from text: String) -> Double {
         let clean = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: ",", with: ".")
@@ -235,7 +298,7 @@ enum DoseAmountFormatter {
         return normalized(fractionValue(from: clean) ?? 0)
     }
 
-    static func displayText(for value: Double) -> String {
+    public static func displayText(for value: Double) -> String {
         let normalizedValue = normalized(value)
         let quarters = Int((normalizedValue * 4).rounded())
         let whole = quarters / 4

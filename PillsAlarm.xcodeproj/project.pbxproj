@@ -8,8 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* PillsAlarmApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PillsAlarmApp.swift */; };
-		A10000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* Models.swift */; };
-		A10000000000000000000003 /* ScheduleEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* ScheduleEngine.swift */; };
 		A10000000000000000000004 /* MedicationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* MedicationStore.swift */; };
 		A10000000000000000000005 /* NotificationScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* NotificationScheduler.swift */; };
 		A10000000000000000000006 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* ContentView.swift */; };
@@ -24,10 +22,15 @@
 		A10000000000000000000015 /* CloudKitIntegrationRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* CloudKitIntegrationRunner.swift */; };
 		A10000000000000000000016 /* AlarmAuditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* AlarmAuditView.swift */; };
 		A10000000000000000000017 /* DoseAlarm.wav in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* DoseAlarm.wav */; };
-		A10000000000000000000018 /* ConfirmationStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000021 /* ConfirmationStateStore.swift */; };
-		A10000000000000000000019 /* MedicationDomainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000022 /* MedicationDomainStore.swift */; };
+		A10000000000000000000028 /* CloudSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000031 /* CloudSyncModels.swift */; };
+		A10000000000000000000029 /* CloudKitRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000032 /* CloudKitRepository.swift */; };
+		A10000000000000000000030 /* StoreErrors.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000033 /* StoreErrors.swift */; };
+		A10000000000000000000031 /* CloudKitModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000034 /* CloudKitModels.swift */; };
+		C10000000000000000000001 /* PillCore in Frameworks */ = {isa = PBXBuildFile; productRef = C20000000000000000000001 /* PillCore */; };
+		C10000000000000000000002 /* PillCore in Frameworks */ = {isa = PBXBuildFile; productRef = C20000000000000000000002 /* PillCore */; };
 		B10000000000000000000001 /* ConfirmationStateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* ConfirmationStateStoreTests.swift */; };
 		B10000000000000000000002 /* MedicationDomainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* MedicationDomainStoreTests.swift */; };
+		B10000000000000000000003 /* BusinessRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* BusinessRulesTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,8 +45,6 @@
 
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* PillsAlarmApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillsAlarmApp.swift; sourceTree = "<group>"; };
-		A20000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
-		A20000000000000000000003 /* ScheduleEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleEngine.swift; sourceTree = "<group>"; };
 		A20000000000000000000004 /* MedicationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MedicationStore.swift; sourceTree = "<group>"; };
 		A20000000000000000000005 /* NotificationScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationScheduler.swift; sourceTree = "<group>"; };
 		A20000000000000000000006 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -61,11 +62,14 @@
 		A20000000000000000000018 /* CloudKitIntegrationRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitIntegrationRunner.swift; sourceTree = "<group>"; };
 		A20000000000000000000019 /* AlarmAuditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmAuditView.swift; sourceTree = "<group>"; };
 		A20000000000000000000020 /* DoseAlarm.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = DoseAlarm.wav; sourceTree = "<group>"; };
-		A20000000000000000000021 /* ConfirmationStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationStateStore.swift; sourceTree = "<group>"; };
 		B20000000000000000000001 /* ConfirmationStateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationStateStoreTests.swift; sourceTree = "<group>"; };
 		B20000000000000000000002 /* PillsAlarmTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PillsAlarmTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A20000000000000000000022 /* MedicationDomainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MedicationDomainStore.swift; sourceTree = "<group>"; };
 		B20000000000000000000003 /* MedicationDomainStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MedicationDomainStoreTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000031 /* CloudSyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncModels.swift; sourceTree = "<group>"; };
+		A20000000000000000000032 /* CloudKitRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitRepository.swift; sourceTree = "<group>"; };
+		A20000000000000000000033 /* StoreErrors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreErrors.swift; sourceTree = "<group>"; };
+		A20000000000000000000034 /* CloudKitModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitModels.swift; sourceTree = "<group>"; };
+		B20000000000000000000004 /* BusinessRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BusinessRulesTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,6 +77,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C10000000000000000000001 /* PillCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,6 +85,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C10000000000000000000002 /* PillCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -100,10 +106,10 @@
 			children = (
 				A20000000000000000000001 /* PillsAlarmApp.swift */,
 				A20000000000000000000013 /* AppDelegate.swift */,
-				A20000000000000000000002 /* Models.swift */,
-				A20000000000000000000003 /* ScheduleEngine.swift */,
-				A20000000000000000000021 /* ConfirmationStateStore.swift */,
-				A20000000000000000000022 /* MedicationDomainStore.swift */,
+				A20000000000000000000034 /* CloudKitModels.swift */,
+				A20000000000000000000031 /* CloudSyncModels.swift */,
+				A20000000000000000000032 /* CloudKitRepository.swift */,
+				A20000000000000000000033 /* StoreErrors.swift */,
 				A20000000000000000000004 /* MedicationStore.swift */,
 				A20000000000000000000018 /* CloudKitIntegrationRunner.swift */,
 				A20000000000000000000005 /* NotificationScheduler.swift */,
@@ -145,6 +151,7 @@
 			children = (
 				B20000000000000000000001 /* ConfirmationStateStoreTests.swift */,
 				B20000000000000000000003 /* MedicationDomainStoreTests.swift */,
+				B20000000000000000000004 /* BusinessRulesTests.swift */,
 			);
 			path = PillsAlarmTests;
 			sourceTree = "<group>";
@@ -165,6 +172,9 @@
 			dependencies = (
 			);
 			name = PillsAlarm;
+			packageProductDependencies = (
+				C20000000000000000000001 /* PillCore */,
+			);
 			productName = PillsAlarm;
 			productReference = A20000000000000000000012 /* PillsAlarm.app */;
 			productType = "com.apple.product-type.application";
@@ -182,6 +192,9 @@
 				B60000000000000000000002 /* PBXTargetDependency */,
 			);
 			name = PillsAlarmTests;
+			packageProductDependencies = (
+				C20000000000000000000002 /* PillCore */,
+			);
 			productName = PillsAlarmTests;
 			productReference = B20000000000000000000002 /* PillsAlarmTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -210,6 +223,9 @@
 				Base,
 			);
 			mainGroup = A40000000000000000000001;
+			packageReferences = (
+				C30000000000000000000001 /* XCLocalSwiftPackageReference "Packages/PillCore" */,
+			);
 			productRefGroup = A40000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -238,8 +254,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* PillsAlarmApp.swift in Sources */,
-				A10000000000000000000002 /* Models.swift in Sources */,
-				A10000000000000000000003 /* ScheduleEngine.swift in Sources */,
 				A10000000000000000000004 /* MedicationStore.swift in Sources */,
 				A10000000000000000000005 /* NotificationScheduler.swift in Sources */,
 				A10000000000000000000006 /* ContentView.swift in Sources */,
@@ -252,8 +266,10 @@
 				A10000000000000000000013 /* CloudSharingView.swift in Sources */,
 				A10000000000000000000015 /* CloudKitIntegrationRunner.swift in Sources */,
 				A10000000000000000000016 /* AlarmAuditView.swift in Sources */,
-				A10000000000000000000018 /* ConfirmationStateStore.swift in Sources */,
-				A10000000000000000000019 /* MedicationDomainStore.swift in Sources */,
+				A10000000000000000000028 /* CloudSyncModels.swift in Sources */,
+				A10000000000000000000029 /* CloudKitRepository.swift in Sources */,
+				A10000000000000000000030 /* StoreErrors.swift in Sources */,
+				A10000000000000000000031 /* CloudKitModels.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -263,6 +279,7 @@
 			files = (
 				B10000000000000000000001 /* ConfirmationStateStoreTests.swift in Sources */,
 				B10000000000000000000002 /* MedicationDomainStoreTests.swift in Sources */,
+				B10000000000000000000003 /* BusinessRulesTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -275,6 +292,26 @@
 			targetProxy = B60000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		C30000000000000000000001 /* XCLocalSwiftPackageReference "Packages/PillCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/PillCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C20000000000000000000001 /* PillCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C30000000000000000000001 /* XCLocalSwiftPackageReference "Packages/PillCore" */;
+			productName = PillCore;
+		};
+		C20000000000000000000002 /* PillCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C30000000000000000000001 /* XCLocalSwiftPackageReference "Packages/PillCore" */;
+			productName = PillCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A90000000000000000000003 /* Debug */ = {
@@ -404,7 +441,7 @@
 				CLOUDKIT_ENVIRONMENT = Development;
 				CODE_SIGN_ENTITLEMENTS = PillsAlarm/PillsAlarm.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 49;
+				CURRENT_PROJECT_VERSION = 53;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 69V6Z9TN5K;
 				ENABLE_DEBUG_DYLIB = NO;
@@ -429,7 +466,7 @@
 				CLOUDKIT_ENVIRONMENT = Production;
 				CODE_SIGN_ENTITLEMENTS = PillsAlarm/PillsAlarm.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 49;
+				CURRENT_PROJECT_VERSION = 53;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = 69V6Z9TN5K;
 				ENABLE_DEBUG_DYLIB = NO;

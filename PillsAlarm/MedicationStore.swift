@@ -1,37 +1,6 @@
 import CloudKit
-import CryptoKit
 import Foundation
-
-struct WorkspaceSource: Identifiable, Hashable {
-    var id: String
-    var name: String
-    var isShared: Bool
-}
-
-struct MedicationListItem: Identifiable, Hashable {
-    var medication: Medication
-    var source: WorkspaceSource
-
-    var id: String {
-        "\(source.id)|\(medication.id.uuidString)"
-    }
-}
-
-struct ConfirmationListItem: Identifiable, Hashable {
-    var confirmation: DoseConfirmation
-    var source: WorkspaceSource
-
-    var id: String {
-        "\(source.id)|\(confirmation.eventId)"
-    }
-}
-
-struct SharedWorkspaceProfile: Identifiable, Hashable {
-    var id: String
-    var name: String
-    var currentMemberName: String
-    var otherMembers: [CareMember]
-}
+import PillCore
 
 @MainActor
 final class MedicationStore: ObservableObject {
@@ -61,14 +30,15 @@ final class MedicationStore: ObservableObject {
     private let cloud: CloudKitRepository
     private let defaults: UserDefaults
     private let domainState = MedicationDomainStore()
+    private lazy var zoneChangeTokens = ZoneChangeTokenStore(defaults: defaults)
     private var groupRecord: CKRecord?
-    private var groupDatabase: CKDatabase?
     private var groupDatabaseScope: CKDatabase.Scope?
     private var workspaceContexts: [String: WorkspaceContext] = [:]
     private var personalWorkspaceId: String?
     private var ownedGroupWorkspaceId: String?
     private var loadGeneration = 0
     private var syncOperationCount = 0
+    private var hasLoadedCloudState = false
 
     init(cloud: CloudKitRepository? = nil, defaults: UserDefaults = .standard) {
         self.cloud = cloud ?? CloudKitRepository()
@@ -116,7 +86,7 @@ final class MedicationStore: ObservableObject {
     }
 
     var canRecordDose: Bool {
-        !hasGroup || !currentMemberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        MedicationAccessRules.canRecordDose(hasGroup: hasGroup, currentMemberName: currentMemberName)
     }
 
     func canRecordDose(_ dose: GeneratedDose) -> Bool {
@@ -124,7 +94,11 @@ final class MedicationStore: ObservableObject {
             return true
         }
 
-        return !currentMemberName(in: context).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return MedicationAccessRules.canRecordDose(
+            contextIsShared: context.isShared,
+            contextHasMembers: !context.members.isEmpty,
+            currentMemberName: currentMemberName(in: context)
+        )
     }
 
     func canEditMedication(_ item: MedicationListItem) -> Bool {
@@ -132,15 +106,12 @@ final class MedicationStore: ObservableObject {
     }
 
     func canManageSharing(_ item: MedicationListItem) -> Bool {
-        guard let currentUserRecordName else {
-            return false
-        }
-
-        if item.medication.ownerUserRecordName == nil {
-            return item.source.id == personalWorkspaceId || item.source.id == ownedGroupWorkspaceId
-        }
-
-        return item.medication.ownerUserRecordName == currentUserRecordName
+        MedicationAccessRules.canManageMedication(
+            item,
+            currentUserRecordName: currentUserRecordName,
+            personalWorkspaceId: personalWorkspaceId,
+            ownedGroupWorkspaceId: ownedGroupWorkspaceId
+        )
     }
 
     func start() async {
@@ -182,22 +153,29 @@ final class MedicationStore: ObservableObject {
             try await cloud.ensurePrivateZone()
             guard generation == loadGeneration else { return }
 
-            let resolvedSnapshots = try await loadWorkspaceSnapshots()
+            let requestedMode: WorkspaceSyncMode = hasLoadedCloudState ? .incremental : .fullRecovery
+            let syncResult = try await loadWorkspaceSnapshots(mode: requestedMode)
+            let resolvedSnapshots = syncResult.snapshots
 
             guard generation == loadGeneration else { return }
 
-            try await cloud.repairShareHierarchy(for: resolvedSnapshots)
-            guard generation == loadGeneration else { return }
+            if syncResult.didFullRecovery {
+                try await cloud.repairShareHierarchy(for: resolvedSnapshots)
+                guard generation == loadGeneration else { return }
+            }
 
-            apply(snapshots: resolvedSnapshots)
+            if syncResult.hasDataChanges {
+                apply(snapshots: resolvedSnapshots)
+                hasLoadedCloudState = true
+            }
 
             var subscriptionError: Error?
-            for context in workspaceContexts.values {
+            for snapshot in syncResult.subscriptionSnapshots {
                 do {
                     try await cloud.installWorkspaceSubscription(
-                        groupRecord: context.groupRecord,
-                        database: context.database,
-                        databaseScope: context.databaseScope
+                        groupRecord: snapshot.group,
+                        database: snapshot.database,
+                        databaseScope: snapshot.databaseScope
                     )
                 } catch {
                     subscriptionError = error
@@ -212,7 +190,9 @@ final class MedicationStore: ObservableObject {
             } else {
                 syncErrorMessage = nil
             }
-            NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
+            if syncResult.hasDataChanges {
+                NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
+            }
         } catch {
             fail(error)
         }
@@ -250,7 +230,6 @@ final class MedicationStore: ObservableObject {
             let firstMember = currentUserMemberForSaving(displayName: cleanMemberName, userRecordName: userRecordName)
             let snapshot = try await cloud.createGroup(name: cleanGroupName, firstMember: firstMember)
             groupRecord = snapshot.group
-            groupDatabase = snapshot.database
             groupDatabaseScope = snapshot.databaseScope
             ownedGroupWorkspaceId = Self.storedGroupReference(from: snapshot).id
             saveStoredGroupReference(from: snapshot)
@@ -336,12 +315,13 @@ final class MedicationStore: ObservableObject {
 
         do {
             let userRecordName = try await ensureCurrentUserRecordName()
-            let currentMember = currentUserMember(in: context)
-            let member = CareMember(
-                id: currentMember?.id ?? Self.memberId(forUserRecordName: userRecordName),
+            let member = MemberIdentityRules.currentUserMemberForSaving(
                 displayName: cleanMemberName,
-                colorHex: currentMember?.colorHex ?? Self.memberColors[context.members.count % Self.memberColors.count],
-                userRecordName: userRecordName
+                userRecordName: userRecordName,
+                currentMember: currentUserMember(in: context),
+                memberCount: context.members.count,
+                membersAreEmpty: context.members.isEmpty,
+                hasLegacyPersonalConfirmations: false
             )
 
             try await cloud.saveMember(member, groupRecord: context.groupRecord, database: context.database)
@@ -382,17 +362,6 @@ final class MedicationStore: ObservableObject {
         domainState.confirmation(for: dose)
     }
 
-    private func confirmationEventIds(for dose: GeneratedDose, including confirmation: DoseConfirmation? = nil) -> [String] {
-        var eventIds: [String] = []
-        let legacyWorkspaceEventId = dose.workspaceId.isEmpty ? nil : "\(dose.workspaceId)|\(dose.baseEventId)"
-        for eventId in [dose.id, dose.baseEventId, legacyWorkspaceEventId, confirmation?.eventId].compactMap({ $0 }) {
-            if !eventIds.contains(eventId) {
-                eventIds.append(eventId)
-            }
-        }
-        return eventIds
-    }
-
     func displayName(for confirmation: DoseConfirmation) -> String? {
         let workspaceId = domainState.workspaceId(forConfirmationEventId: confirmation.eventId) ?? personalWorkspaceId
         let member = workspaceId.flatMap { workspaceContexts[$0]?.members.first { $0.id == confirmation.memberId } }
@@ -410,15 +379,10 @@ final class MedicationStore: ObservableObject {
 
         let memberId = try await currentConfirmationMemberId(in: context)
 
-        let confirmation = DoseConfirmation(
-            eventId: dose.baseEventId,
-            medicationId: dose.medicationId,
-            timeId: dose.timeId,
-            scheduledDate: dose.scheduledDate,
-            amount: dose.amount,
+        let command = ConfirmDoseUseCase.makeCommand(
+            dose: dose,
             status: status,
             memberId: memberId,
-            memberName: "",
             timestamp: Date(),
             note: note
         )
@@ -427,14 +391,14 @@ final class MedicationStore: ObservableObject {
         defer { endSync() }
 
         do {
-            for eventId in confirmationEventIds(for: dose, including: confirmation) {
+            for eventId in command.eventIdsToCheck {
                 if try await cloud.fetchConfirmation(eventId: eventId, groupRecord: context.groupRecord, database: context.database) != nil {
                     await reload(showSyncIndicator: false)
                     return
                 }
             }
-            try await cloud.saveConfirmation(confirmation, groupRecord: context.groupRecord, database: context.database)
-            upsertConfirmationLocally(confirmation, in: context)
+            try await cloud.saveConfirmation(command.confirmation, groupRecord: context.groupRecord, database: context.database)
+            upsertConfirmationLocally(command.confirmation, in: context)
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
         } catch {
             recordSyncError(error)
@@ -454,7 +418,7 @@ final class MedicationStore: ObservableObject {
 
         do {
             let existingConfirmation = confirmation(for: dose)
-            let eventIds = confirmationEventIds(for: dose, including: existingConfirmation)
+            let eventIds = UndoDoseConfirmationUseCase.eventIdsToDelete(for: dose, existingConfirmation: existingConfirmation)
 
             var deletedAnyConfirmation = false
             for eventId in eventIds {
@@ -477,27 +441,7 @@ final class MedicationStore: ObservableObject {
     }
 
     func addMedication() -> Medication {
-        let morning = DoseTime(label: "Ráno", time: TimeOfDay(hour: 7, minute: 0))
-        let noon = DoseTime(label: "Poledne", time: TimeOfDay(hour: 12, minute: 0))
-        let evening = DoseTime(label: "Večer", time: TimeOfDay(hour: 19, minute: 0))
-        return Medication(
-            name: "Nový lék",
-            note: "",
-            colorHex: "#2F80ED",
-            startDate: Calendar.current.startOfDay(for: Date()),
-            doseTimes: [morning, noon, evening],
-            phases: [
-                PlanPhase(
-                    title: "Základní dávkování",
-                    durationDays: nil,
-                    doses: [
-                        DoseEntry(timeId: morning.id, amount: 0),
-                        DoseEntry(timeId: noon.id, amount: 0),
-                        DoseEntry(timeId: evening.id, amount: 0)
-                    ]
-                )
-            ]
-        )
+        MedicationFactory.newMedication()
     }
 
     func upsertMedication(_ medication: Medication) async throws {
@@ -506,8 +450,7 @@ final class MedicationStore: ObservableObject {
             recordSyncError(error)
             throw error
         }
-        var medicationToSave = medication
-        medicationToSave.ownerUserRecordName = medicationToSave.ownerUserRecordName ?? currentUserRecordName
+        let medicationToSave = UpsertMedicationUseCase.medicationForSaving(medication, currentUserRecordName: currentUserRecordName)
 
         beginSync()
         defer { endSync() }
@@ -520,27 +463,6 @@ final class MedicationStore: ObservableObject {
         } catch {
             recordSyncError(error)
             throw error
-        }
-    }
-
-    func deleteMedication(_ medication: Medication) {
-        guard let workspaceId = domainState.workspaceId(forMedicationId: medication.id),
-              let context = workspaceContexts[workspaceId],
-              !context.isShared else {
-            return
-        }
-
-        Task {
-            beginSync()
-            defer { endSync() }
-
-            do {
-                try await deleteConfirmations(for: medication.id, in: context)
-                try await cloud.deleteMedication(medication, groupRecord: context.groupRecord, database: context.database)
-                await reload()
-            } catch {
-                recordSyncError(error)
-            }
         }
     }
 
@@ -596,19 +518,21 @@ final class MedicationStore: ObservableObject {
 
         do {
             let sourceConfirmations = confirmationsForMedication(item.medication.id, in: sourceContext)
-            let updatedConfirmations = sourceConfirmations
-                .map { confirmationForSharingChange($0, to: destinationContext) }
-            let updatedConfirmationEventIds = Set(updatedConfirmations.map(\.eventId))
-            var medicationForSharingChange = updatedMedication ?? item.medication
-            medicationForSharingChange.ownerUserRecordName = medicationForSharingChange.ownerUserRecordName ?? currentUserRecordName
-            medicationForSharingChange.sharedGroupId = shouldShare ? destinationContext.id : nil
+            let change = ShareMedicationUseCase.makeChange(
+                item: item,
+                updatedMedication: updatedMedication,
+                shouldShare: shouldShare,
+                destinationWorkspaceId: destinationContext.id,
+                currentUserRecordName: currentUserRecordName,
+                sourceConfirmations: sourceConfirmations
+            )
 
-            try await cloud.saveMedication(medicationForSharingChange, groupRecord: destinationContext.groupRecord, database: destinationContext.database)
-            for confirmation in updatedConfirmations {
+            try await cloud.saveMedication(change.medication, groupRecord: destinationContext.groupRecord, database: destinationContext.database)
+            for confirmation in change.updatedConfirmations {
                 try await cloud.saveConfirmation(confirmation, groupRecord: destinationContext.groupRecord, database: destinationContext.database)
             }
             if isSameCloudRecordLocation(sourceContext, destinationContext) {
-                for confirmation in sourceConfirmations where !updatedConfirmationEventIds.contains(confirmation.eventId) {
+                for confirmation in sourceConfirmations where !change.updatedConfirmationEventIds.contains(confirmation.eventId) {
                     try await cloud.deleteConfirmation(eventId: confirmation.eventId, groupRecord: sourceContext.groupRecord, database: sourceContext.database)
                 }
             } else {
@@ -619,9 +543,9 @@ final class MedicationStore: ObservableObject {
             }
 
             applySharingChangeLocally(
-                medicationForSharingChange,
-                updatedConfirmations: updatedConfirmations,
-                originalConfirmationEventIds: sourceConfirmations.map(\.eventId),
+                change.medication,
+                updatedConfirmations: change.updatedConfirmations,
+                originalConfirmationEventIds: change.originalConfirmationEventIds,
                 from: sourceContext,
                 to: destinationContext
             )
@@ -638,7 +562,7 @@ final class MedicationStore: ObservableObject {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { return }
 
-        let member = CareMember(displayName: cleanName, colorHex: Self.memberColors[members.count % Self.memberColors.count])
+        let member = CareMember(displayName: cleanName, colorHex: MemberIdentityRules.color(forMemberCount: members.count))
         Task {
             beginSync()
             defer { endSync() }
@@ -761,7 +685,6 @@ final class MedicationStore: ObservableObject {
             }
 
             groupRecord = snapshot.group
-            groupDatabase = snapshot.database
             groupDatabaseScope = snapshot.databaseScope
             saveStoredGroupReference(from: snapshot)
             apply(snapshot: snapshot)
@@ -830,11 +753,11 @@ final class MedicationStore: ObservableObject {
 
     private func clearLoadedData() {
         groupRecord = nil
-        groupDatabase = nil
         groupDatabaseScope = nil
         workspaceContexts = [:]
         personalWorkspaceId = nil
         ownedGroupWorkspaceId = nil
+        hasLoadedCloudState = false
         careGroupName = ""
         members = []
         activeMemberId = nil
@@ -843,14 +766,33 @@ final class MedicationStore: ObservableObject {
         sharedWorkspaceProfiles = []
     }
 
-    private func loadWorkspaceSnapshots() async throws -> [CloudSnapshot] {
+    private func loadWorkspaceSnapshots(mode: WorkspaceSyncMode) async throws -> WorkspaceSyncResult {
         workspaceCandidates = []
 
-        let personalSnapshot = try await cloud.ensurePersonalWorkspace()
-        let allSnapshots = try await cloud.fetchAllGroupSnapshots()
-        let privateGroupSnapshots = allSnapshots.filter {
+        switch mode {
+        case .fullRecovery:
+            return try await loadFullWorkspaceSnapshots()
+        case .incremental:
+            return try await loadIncrementalWorkspaceSnapshots()
+        }
+    }
+
+    private func loadFullWorkspaceSnapshots() async throws -> WorkspaceSyncResult {
+        let privateZoneResult = try await cloud.fetchPrivateGroupSnapshotsEnsuringPersonalWorkspace()
+        for snapshot in privateZoneResult.snapshots {
+            if let serverChangeToken = privateZoneResult.serverChangeToken {
+                zoneChangeTokens.set(serverChangeToken, for: Self.storedGroupReference(from: snapshot))
+            }
+        }
+
+        guard let personalSnapshot = privateZoneResult.snapshots.first(where: { cloud.isCanonicalPersonalWorkspace($0) }) else {
+            throw StoreError.missingCloudWorkspace
+        }
+
+        let privateGroupSnapshots = privateZoneResult.snapshots.filter {
             $0.databaseScope == .private && !cloud.isCanonicalPersonalWorkspace($0) && !$0.members.isEmpty
         }
+
         let hiddenSharedIds = hiddenSharedWorkspaceIds
         var snapshots = [personalSnapshot]
         var seenIds = Set([Self.storedGroupReference(from: personalSnapshot).id])
@@ -860,10 +802,14 @@ final class MedicationStore: ObservableObject {
                   !hiddenSharedIds.contains(reference.id),
                   !seenIds.contains(reference.id) else { continue }
 
-            guard let snapshot = try await cloud.fetchGroupSnapshot(reference: reference) else {
+            guard let result = try await cloud.fetchGroupSnapshotWithToken(reference: reference),
+                  let snapshot = result.snapshot else {
                 throw CloudKitShareError.acceptedShareUnavailable(reference.id)
             }
 
+            if let serverChangeToken = result.serverChangeToken {
+                zoneChangeTokens.set(serverChangeToken, for: reference)
+            }
             snapshots.append(snapshot)
             seenIds.insert(reference.id)
         }
@@ -875,7 +821,190 @@ final class MedicationStore: ObservableObject {
             seenIds.insert(id)
         }
 
-        return snapshots
+        return WorkspaceSyncResult(
+            snapshots: snapshots,
+            hasDataChanges: true,
+            didFullRecovery: true,
+            subscriptionSnapshots: snapshots
+        )
+    }
+
+    private func loadIncrementalWorkspaceSnapshots() async throws -> WorkspaceSyncResult {
+        let hiddenSharedIds = hiddenSharedWorkspaceIds
+        var contexts = workspaceContexts
+        var seenIds = Set<String>()
+        var subscriptionSnapshots: [CloudSnapshot] = []
+        var hasDataChanges = false
+        var didFullRecovery = false
+
+        var references = contexts.values.map(\.reference)
+        let acceptedReferences = loadAcceptedSharedGroupReferences().filter {
+            $0.databaseScope == CKDatabase.Scope.shared.rawValue && !hiddenSharedIds.contains($0.id)
+        }
+        for reference in acceptedReferences where !references.contains(reference) {
+            references.append(reference)
+        }
+
+        for reference in references {
+            guard !hiddenSharedIds.contains(reference.id) else {
+                if contexts.removeValue(forKey: reference.id) != nil {
+                    hasDataChanges = true
+                }
+                zoneChangeTokens.removeToken(for: reference)
+                continue
+            }
+
+            seenIds.insert(reference.id)
+
+            guard var context = contexts[reference.id] else {
+                guard let result = try await cloud.fetchGroupSnapshotWithToken(reference: reference),
+                      let snapshot = result.snapshot else {
+                    throw CloudKitShareError.acceptedShareUnavailable(reference.id)
+                }
+                if let serverChangeToken = result.serverChangeToken {
+                    zoneChangeTokens.set(serverChangeToken, for: reference)
+                }
+                let newContext = WorkspaceContext(snapshot: snapshot)
+                contexts[reference.id] = newContext
+                subscriptionSnapshots.append(snapshot)
+                hasDataChanges = true
+                didFullRecovery = true
+                continue
+            }
+
+            guard let token = zoneChangeTokens.token(for: reference) else {
+                guard let result = try await cloud.fetchGroupSnapshotWithToken(reference: reference),
+                      let snapshot = result.snapshot else {
+                    contexts.removeValue(forKey: reference.id)
+                    hasDataChanges = true
+                    continue
+                }
+                if let serverChangeToken = result.serverChangeToken {
+                    zoneChangeTokens.set(serverChangeToken, for: reference)
+                }
+                contexts[reference.id] = WorkspaceContext(snapshot: snapshot)
+                subscriptionSnapshots.append(snapshot)
+                hasDataChanges = true
+                didFullRecovery = true
+                continue
+            }
+
+            do {
+                let changes = try await cloud.fetchZoneChanges(reference: reference, previousServerChangeToken: token)
+
+                if let serverChangeToken = changes.serverChangeToken {
+                    zoneChangeTokens.set(serverChangeToken, for: reference)
+                }
+
+                guard !changes.changedRecords.isEmpty || !changes.deletedRecordIDs.isEmpty else {
+                    continue
+                }
+
+                if apply(changes: changes, to: &context) {
+                    contexts[reference.id] = context
+                } else {
+                    contexts.removeValue(forKey: reference.id)
+                    zoneChangeTokens.removeToken(for: reference)
+                }
+                hasDataChanges = true
+            } catch {
+                guard cloud.isChangeTokenExpired(error) else { throw error }
+
+                zoneChangeTokens.removeToken(for: reference)
+                guard let result = try await cloud.fetchGroupSnapshotWithToken(reference: reference),
+                      let snapshot = result.snapshot else {
+                    contexts.removeValue(forKey: reference.id)
+                    hasDataChanges = true
+                    didFullRecovery = true
+                    continue
+                }
+                if let serverChangeToken = result.serverChangeToken {
+                    zoneChangeTokens.set(serverChangeToken, for: reference)
+                }
+                contexts[reference.id] = WorkspaceContext(snapshot: snapshot)
+                subscriptionSnapshots.append(snapshot)
+                hasDataChanges = true
+                didFullRecovery = true
+            }
+        }
+
+        let staleContexts = contexts.values.filter { !seenIds.contains($0.id) }
+        for staleContext in staleContexts {
+            contexts.removeValue(forKey: staleContext.id)
+            zoneChangeTokens.removeToken(for: staleContext.reference)
+            hasDataChanges = true
+        }
+
+        let snapshots = contexts.values.map { context in
+            CloudSnapshot(
+                group: context.groupRecord,
+                database: context.database,
+                databaseScope: context.databaseScope,
+                name: context.name,
+                members: context.members,
+                medications: context.medications,
+                confirmations: context.confirmations
+            )
+        }
+
+        return WorkspaceSyncResult(
+            snapshots: snapshots,
+            hasDataChanges: hasDataChanges,
+            didFullRecovery: didFullRecovery,
+            subscriptionSnapshots: subscriptionSnapshots
+        )
+    }
+
+    private func apply(changes: ZoneChanges, to context: inout WorkspaceContext) -> Bool {
+        for recordID in changes.deletedRecordIDs {
+            if recordID.recordName == context.groupRecord.recordID.recordName {
+                return false
+            }
+
+            if let memberId = Self.uuid(fromRecordName: recordID.recordName, prefix: "member") {
+                context.members.removeAll { $0.id == memberId }
+            } else if let medicationId = Self.uuid(fromRecordName: recordID.recordName, prefix: "medication") {
+                context.medications.removeAll { $0.id == medicationId }
+                context.confirmations.removeAll { $0.medicationId == medicationId }
+            } else if let eventId = Self.confirmationEventId(fromRecordName: recordID.recordName) {
+                context.confirmations.removeAll { $0.eventId == eventId }
+            }
+        }
+
+        for record in changes.changedRecords {
+            switch record.recordType {
+            case RecordType.group where record.recordID.recordName == context.groupRecord.recordID.recordName:
+                context.groupRecord = record
+                context.name = record[Field.name] as? String ?? ""
+                context.source = WorkspaceSource(id: context.id, name: context.name, isShared: context.isShared)
+            case RecordType.member where cloud.isRecord(record, linkedTo: context.groupRecord):
+                guard let member = cloud.member(from: record) else { continue }
+                if let index = context.members.firstIndex(where: { $0.id == member.id }) {
+                    context.members[index] = member
+                } else {
+                    context.members.append(member)
+                }
+            case RecordType.medication where cloud.isRecord(record, linkedTo: context.groupRecord):
+                guard let medication = cloud.decodePayload(record, as: Medication.self) else { continue }
+                if let index = context.medications.firstIndex(where: { $0.id == medication.id }) {
+                    context.medications[index] = medication
+                } else {
+                    context.medications.append(medication)
+                }
+            case RecordType.confirmation where cloud.isRecord(record, linkedTo: context.groupRecord):
+                guard let confirmation = cloud.decodePayload(record, as: DoseConfirmation.self) else { continue }
+                if let index = context.confirmations.firstIndex(where: { $0.eventId == confirmation.eventId }) {
+                    context.confirmations[index] = confirmation
+                } else {
+                    context.confirmations.append(confirmation)
+                }
+            default:
+                continue
+            }
+        }
+
+        context.members.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        return true
     }
 
     private func fail(_ error: Error) {
@@ -940,7 +1069,7 @@ final class MedicationStore: ObservableObject {
     }
 
     private func relinkPersonalConfirmations(to member: CareMember, userRecordName: String, groupRecord: CKRecord, database: CKDatabase) async throws {
-        let stablePersonalMemberId = Self.memberId(forUserRecordName: userRecordName)
+        let stablePersonalMemberId = MemberIdentityRules.memberId(forUserRecordName: userRecordName)
         let knownMemberIds = Set(members.map(\.id))
         let canClaimOrphanedPrivateConfirmations = groupDatabaseScope == .private
         var changedConfirmations: [DoseConfirmation] = []
@@ -953,7 +1082,7 @@ final class MedicationStore: ObservableObject {
             }
 
             let isAlreadyLinked = confirmation.memberId == member.id
-            let isLegacyPersonal = confirmation.memberId == Self.legacyPersonalConfirmationMemberId
+            let isLegacyPersonal = confirmation.memberId == MemberIdentityRules.legacyPersonalConfirmationMemberId
             let isStablePersonal = confirmation.memberId == stablePersonalMemberId
             let isOrphaned = !knownMemberIds.contains(confirmation.memberId)
 
@@ -1023,7 +1152,6 @@ final class MedicationStore: ObservableObject {
         personalWorkspaceId = personal.id
         ownedGroupWorkspaceId = ownedGroup?.id
         groupRecord = ownedGroup?.groupRecord
-        groupDatabase = ownedGroup?.database
         groupDatabaseScope = ownedGroup?.databaseScope
         saveStoredGroupReference(from: CloudSnapshot(
             group: personal.groupRecord,
@@ -1122,24 +1250,9 @@ final class MedicationStore: ObservableObject {
         }
     }
 
-    private func confirmationForSharingChange(_ confirmation: DoseConfirmation, to destination: WorkspaceContext) -> DoseConfirmation {
-        var updated = confirmation
-        let baseEventId = Self.baseEventId(from: confirmation.eventId)
-        updated.eventId = baseEventId
-        return updated
-    }
-
     private func isSameCloudRecordLocation(_ lhs: WorkspaceContext, _ rhs: WorkspaceContext) -> Bool {
         lhs.databaseScope == rhs.databaseScope
             && lhs.groupRecord.recordID.zoneID == rhs.groupRecord.recordID.zoneID
-    }
-
-    private static func baseEventId(from eventId: String) -> String {
-        guard let separator = eventId.range(of: "|", options: .backwards) else {
-            return eventId
-        }
-
-        return String(eventId[separator.upperBound...])
     }
 
     private func source(for context: WorkspaceContext, medication: Medication) -> WorkspaceSource {
@@ -1165,6 +1278,18 @@ final class MedicationStore: ObservableObject {
 
     private static func confirmationSlotKey(medicationId: UUID, timeId: UUID) -> String {
         "\(medicationId.uuidString)-\(timeId.uuidString)"
+    }
+
+    private static func uuid(fromRecordName recordName: String, prefix: String) -> UUID? {
+        let marker = "\(prefix)-"
+        guard recordName.hasPrefix(marker) else { return nil }
+        return UUID(uuidString: String(recordName.dropFirst(marker.count)))
+    }
+
+    private static func confirmationEventId(fromRecordName recordName: String) -> String? {
+        let marker = "confirmation-"
+        guard recordName.hasPrefix(marker) else { return nil }
+        return String(recordName.dropFirst(marker.count))
     }
 
     private var currentOwnedGroupMember: CareMember? {
@@ -1245,37 +1370,18 @@ final class MedicationStore: ObservableObject {
         }
 
         let userRecordName = try await ensureCurrentUserRecordName()
-        return Self.memberId(forUserRecordName: userRecordName)
+        return MemberIdentityRules.memberId(forUserRecordName: userRecordName)
     }
 
     private func currentUserMemberForSaving(displayName: String, userRecordName: String) -> CareMember {
-        let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let memberId = currentOwnedGroupMember?.id ?? currentMemberIdForNewGroup(userRecordName: userRecordName)
-        let colorHex = currentOwnedGroupMember?.colorHex ?? Self.memberColors[members.count % Self.memberColors.count]
-        return CareMember(id: memberId, displayName: cleanName, colorHex: colorHex, userRecordName: userRecordName)
-    }
-
-    private func currentMemberIdForNewGroup(userRecordName: String) -> UUID {
-        if members.isEmpty,
-           confirmations.values.contains(where: { $0.memberId == Self.legacyPersonalConfirmationMemberId }) {
-            return Self.legacyPersonalConfirmationMemberId
-        }
-
-        return Self.memberId(forUserRecordName: userRecordName)
-    }
-
-    private static func memberId(forUserRecordName userRecordName: String) -> UUID {
-        let digest = SHA256.hash(data: Data(userRecordName.utf8))
-        var bytes = Array(digest.prefix(16))
-        bytes[6] = (bytes[6] & 0x0F) | 0x50
-        bytes[8] = (bytes[8] & 0x3F) | 0x80
-        return UUID(uuid: (
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5],
-            bytes[6], bytes[7],
-            bytes[8], bytes[9],
-            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
+        MemberIdentityRules.currentUserMemberForSaving(
+            displayName: displayName,
+            userRecordName: userRecordName,
+            currentMember: currentOwnedGroupMember,
+            memberCount: members.count,
+            membersAreEmpty: members.isEmpty,
+            hasLegacyPersonalConfirmations: confirmations.values.contains { $0.memberId == MemberIdentityRules.legacyPersonalConfirmationMemberId }
+        )
     }
 
     private static func userMessage(for error: Error) -> String {
@@ -1405,985 +1511,7 @@ final class MedicationStore: ObservableObject {
         defaults.set(Array(ids).sorted(), forKey: Self.hiddenSharedWorkspaceIdsKey)
     }
 
-    private static let memberColors = ["#2F80ED", "#27AE60", "#EB5757", "#9B51E0", "#F2994A", "#00A3A3"]
     static let storedGroupReferenceKey = "PillCareStoredGroupReference"
     private static let acceptedSharedGroupReferencesKey = "PillCareAcceptedSharedGroupReferences"
     private static let hiddenSharedWorkspaceIdsKey = "PillCareHiddenSharedWorkspaceIds"
-    private static let legacyPersonalConfirmationMemberId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-}
-
-struct CloudSharingController: Identifiable {
-    var id: CKRecord.ID { share.recordID }
-    let share: CKShare
-    let groupRecord: CKRecord
-    let database: CKDatabase
-    let title: String
-}
-
-struct CloudSharePreparation {
-    var groupRecord: CKRecord
-    var share: CKShare
-}
-
-struct CloudSnapshot {
-    var group: CKRecord
-    var database: CKDatabase
-    var databaseScope: CKDatabase.Scope
-    var name: String
-    var members: [CareMember]
-    var medications: [Medication]
-    var confirmations: [DoseConfirmation]
-
-    var isEmpty: Bool {
-        members.isEmpty && medications.isEmpty && confirmations.isEmpty
-    }
-}
-
-private struct WorkspaceContext {
-    var id: String
-    var reference: StoredGroupReference
-    var source: WorkspaceSource
-    var groupRecord: CKRecord
-    var database: CKDatabase
-    var databaseScope: CKDatabase.Scope
-    var name: String
-    var members: [CareMember]
-    var medications: [Medication]
-    var confirmations: [DoseConfirmation]
-
-    var isShared: Bool {
-        databaseScope == .shared
-    }
-
-    init(snapshot: CloudSnapshot) {
-        let reference = StoredGroupReference(
-            recordName: snapshot.group.recordID.recordName,
-            zoneName: snapshot.group.recordID.zoneID.zoneName,
-            ownerName: snapshot.group.recordID.zoneID.ownerName,
-            databaseScope: snapshot.databaseScope.rawValue
-        )
-        self.reference = reference
-        id = reference.id
-        source = WorkspaceSource(
-            id: reference.id,
-            name: snapshot.name,
-            isShared: snapshot.databaseScope == .shared
-        )
-        groupRecord = snapshot.group
-        database = snapshot.database
-        databaseScope = snapshot.databaseScope
-        name = snapshot.name
-        members = snapshot.members
-        medications = snapshot.medications
-        confirmations = snapshot.confirmations
-    }
-}
-
-struct WorkspaceCandidate: Identifiable, Equatable {
-    var reference: StoredGroupReference
-    var name: String
-    var databaseScope: Int
-    var medicationCount: Int
-    var memberCount: Int
-    var confirmationCount: Int
-    var isActive: Bool
-
-    var id: String { reference.id }
-
-    var typeLabel: String {
-        databaseScope == CKDatabase.Scope.shared.rawValue ? "Sdílené" : "Vlastní"
-    }
-
-    var canDeleteFromCloud: Bool {
-        databaseScope == CKDatabase.Scope.private.rawValue
-    }
-
-    init(snapshot: CloudSnapshot, isActive: Bool) {
-        reference = StoredGroupReference(
-            recordName: snapshot.group.recordID.recordName,
-            zoneName: snapshot.group.recordID.zoneID.zoneName,
-            ownerName: snapshot.group.recordID.zoneID.ownerName,
-            databaseScope: snapshot.databaseScope.rawValue
-        )
-        name = snapshot.name
-        databaseScope = snapshot.databaseScope.rawValue
-        medicationCount = snapshot.medications.count
-        memberCount = snapshot.members.count
-        confirmationCount = snapshot.confirmations.count
-        self.isActive = isActive
-    }
-}
-
-struct StoredGroupReference: Codable, Equatable, Hashable {
-    var recordName: String
-    var zoneName: String
-    var ownerName: String
-    var databaseScope: Int
-
-    var id: String {
-        "\(databaseScope)|\(ownerName)|\(zoneName)|\(recordName)"
-    }
-}
-
-private enum StoreError: LocalizedError {
-    case missingCloudWorkspace
-    case missingGroup
-    case missingSharedMemberName
-    case notPlanOwner
-
-    var errorDescription: String? {
-        switch self {
-        case .missingCloudWorkspace:
-            return "iCloud úložiště ještě není připravené. Chvíli počkej a zkus uložit znovu."
-        case .missingGroup:
-            return "Nejdřív vytvoř skupinu, potom můžeš plán sdílet."
-        case .missingSharedMemberName:
-            return "Nejdřív ve Skupině vyplň svoje jméno pro sdílenou skupinu."
-        case .notPlanOwner:
-            return "Sdílení a úpravy tohohle plánu může měnit jen vlastník plánu."
-        }
-    }
-}
-
-private enum CloudKitShareError: LocalizedError {
-    case invalidExistingShare
-    case missingRootRecord
-    case unexpectedParticipantStatus(String)
-    case acceptedShareUnavailable(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidExistingShare:
-            return "iCloud vrátil neplatný záznam sdílení. Zkus pozvánku otevřít znovu."
-        case .missingRootRecord:
-            return "iCloud pozvánka neobsahuje kořenový záznam sdílení. Požádej odesílatele o novou pozvánku."
-        case .unexpectedParticipantStatus(let status):
-            return "iCloud pozvánka má neočekávaný stav účastníka: \(status)."
-        case .acceptedShareUnavailable(let reference):
-            return "iCloud sdílení bylo přijato, ale sdílený záznam nejde načíst: \(reference)."
-        }
-    }
-}
-
-@MainActor
-final class CloudKitRepository {
-    nonisolated static let containerIdentifier = "iCloud.com.kolisko.pillcare"
-    nonisolated static let defaultZoneName = "PillCareZone"
-    nonisolated static let defaultPersonalWorkspaceRecordName = "personal-default-v1"
-
-    private let container: CKContainer
-    private let zoneID: CKRecordZone.ID
-    private let personalWorkspaceRecordName: String
-
-    init(
-        containerIdentifier: String = CloudKitRepository.containerIdentifier,
-        zoneName: String = CloudKitRepository.defaultZoneName,
-        personalWorkspaceRecordName: String = CloudKitRepository.defaultPersonalWorkspaceRecordName
-    ) {
-        container = CKContainer(identifier: containerIdentifier)
-        zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
-        self.personalWorkspaceRecordName = personalWorkspaceRecordName
-    }
-
-    private var privateDatabase: CKDatabase {
-        container.privateCloudDatabase
-    }
-
-    private var sharedDatabase: CKDatabase {
-        container.sharedCloudDatabase
-    }
-
-    func accountStatus() async throws -> CKAccountStatus {
-        try await withCheckedThrowingContinuation { continuation in
-            container.accountStatus { status, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: status)
-                }
-            }
-        }
-    }
-
-    func currentUserRecordName() async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            container.fetchUserRecordID { recordID, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if let recordID {
-                    continuation.resume(returning: recordID.recordName)
-                } else {
-                    continuation.resume(throwing: CKError(.unknownItem))
-                }
-            }
-        }
-    }
-
-    func ensurePrivateZone() async throws {
-        if try await privateZoneExists() {
-            return
-        }
-
-        let zone = CKRecordZone(zoneID: zoneID)
-        _ = try await modify(recordsToSave: [zone], recordIDsToDelete: [], in: privateDatabase)
-    }
-
-    func createGroup(name: String, firstMember: CareMember) async throws -> CloudSnapshot {
-        try await ensurePrivateZone()
-
-        let group = CKRecord(recordType: RecordType.group, recordID: CKRecord.ID(recordName: "group-\(UUID().uuidString)", zoneID: zoneID))
-        group[Field.name] = name as CKRecordValue
-
-        let member = memberRecord(firstMember, groupRecord: group)
-
-        let saved = try await modify(recordsToSave: [group, member], recordIDsToDelete: [], in: privateDatabase)
-        let savedGroup = saved.first(where: { $0.recordType == RecordType.group }) ?? group
-
-        return CloudSnapshot(
-            group: savedGroup,
-            database: privateDatabase,
-            databaseScope: .private,
-            name: name,
-            members: [firstMember],
-            medications: [],
-            confirmations: []
-        )
-    }
-
-    func ensurePersonalWorkspace() async throws -> CloudSnapshot {
-        try await ensurePrivateZone()
-
-        let recordID = CKRecord.ID(recordName: personalWorkspaceRecordName, zoneID: zoneID)
-        do {
-            let group = try await fetchRecord(recordID: recordID, database: privateDatabase)
-            return try await snapshot(for: group, database: privateDatabase, databaseScope: .private)
-        } catch {
-            if !Self.isRecordMissing(error) && !Self.isZoneNotFound(error) {
-                throw error
-            }
-        }
-
-        let group = CKRecord(recordType: RecordType.group, recordID: recordID)
-
-        let saved = try await modify(recordsToSave: [group], recordIDsToDelete: [], in: privateDatabase)
-        let savedGroup = saved.first(where: { $0.recordType == RecordType.group }) ?? group
-
-        return CloudSnapshot(
-            group: savedGroup,
-            database: privateDatabase,
-            databaseScope: .private,
-            name: "",
-            members: [],
-            medications: [],
-            confirmations: []
-        )
-    }
-
-    func createLegacyPersonalWorkspace(name: String) async throws -> CloudSnapshot {
-        try await ensurePrivateZone()
-
-        let group = CKRecord(recordType: RecordType.group, recordID: CKRecord.ID(recordName: "care-\(UUID().uuidString)", zoneID: zoneID))
-        group[Field.name] = name as CKRecordValue
-
-        let saved = try await modify(recordsToSave: [group], recordIDsToDelete: [], in: privateDatabase)
-        let savedGroup = saved.first(where: { $0.recordType == RecordType.group }) ?? group
-
-        return CloudSnapshot(
-            group: savedGroup,
-            database: privateDatabase,
-            databaseScope: .private,
-            name: name,
-            members: [],
-            medications: [],
-            confirmations: []
-        )
-    }
-
-    func fetchAllGroupSnapshotsWithRetry() async throws -> [CloudSnapshot] {
-        let snapshots = try await fetchAllGroupSnapshots()
-        if !snapshots.isEmpty {
-            return snapshots
-        }
-
-        try await Task.sleep(for: .seconds(1))
-        return try await fetchAllGroupSnapshots()
-    }
-
-    func fetchAllGroupSnapshots() async throws -> [CloudSnapshot] {
-        var snapshots = try await fetchGroupSnapshots(in: privateDatabase, databaseScope: .private, zones: [zoneID])
-        let sharedZones = try await fetchAllZones(in: sharedDatabase).map(\.zoneID)
-        snapshots += try await fetchGroupSnapshots(in: sharedDatabase, databaseScope: .shared, zones: sharedZones)
-        return snapshots.sorted { lhs, rhs in
-            let lhsScore = workspaceScore(lhs)
-            let rhsScore = workspaceScore(rhs)
-            if lhsScore == rhsScore {
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }
-            return lhsScore > rhsScore
-        }
-    }
-
-    func fetchGroupSnapshot(reference: StoredGroupReference) async throws -> CloudSnapshot? {
-        let scope = CKDatabase.Scope(rawValue: reference.databaseScope) ?? .private
-        let zoneID = CKRecordZone.ID(zoneName: reference.zoneName, ownerName: reference.ownerName)
-        let recordID = CKRecord.ID(recordName: reference.recordName, zoneID: zoneID)
-        let database = database(for: scope)
-
-        do {
-            let group = try await fetchRecord(recordID: recordID, database: database)
-            return try await snapshot(for: group, database: database, databaseScope: scope)
-        } catch {
-            if Self.isRecordMissing(error) || Self.isZoneNotFound(error) {
-                return nil
-            }
-
-            throw error
-        }
-    }
-
-    func deleteWorkspace(reference: StoredGroupReference) async throws {
-        let scope = CKDatabase.Scope(rawValue: reference.databaseScope) ?? .private
-        guard scope == .private else { return }
-
-        let zoneID = CKRecordZone.ID(zoneName: reference.zoneName, ownerName: reference.ownerName)
-        let recordID = CKRecord.ID(recordName: reference.recordName, zoneID: zoneID)
-        _ = try await modify(recordsToSave: [], recordIDsToDelete: [recordID], in: database(for: scope))
-    }
-
-    func isCanonicalPersonalWorkspace(_ snapshot: CloudSnapshot) -> Bool {
-        isCanonicalPersonalReference(
-            StoredGroupReference(
-                recordName: snapshot.group.recordID.recordName,
-                zoneName: snapshot.group.recordID.zoneID.zoneName,
-                ownerName: snapshot.group.recordID.zoneID.ownerName,
-                databaseScope: snapshot.databaseScope.rawValue
-            )
-        )
-    }
-
-    func renameGroup(groupRecord: CKRecord, database: CKDatabase, name: String) async throws -> CKRecord {
-        let group = groupRecord
-        group[Field.name] = name as CKRecordValue
-        return try await modify(recordsToSave: [group], recordIDsToDelete: [], in: database)[0]
-    }
-
-    func saveMember(_ member: CareMember, groupRecord: CKRecord, database: CKDatabase) async throws {
-        _ = try await modify(recordsToSave: [memberRecord(member, groupRecord: groupRecord)], recordIDsToDelete: [], in: database)
-    }
-
-    func deleteMember(_ member: CareMember, groupRecord: CKRecord, database: CKDatabase) async throws {
-        let recordID = CKRecord.ID(recordName: recordName(prefix: "member", id: member.id), zoneID: groupRecord.recordID.zoneID)
-        _ = try await modify(recordsToSave: [], recordIDsToDelete: [recordID], in: database)
-    }
-
-    func saveMedication(_ medication: Medication, groupRecord: CKRecord, database: CKDatabase) async throws {
-        let record = CKRecord(recordType: RecordType.medication, recordID: CKRecord.ID(recordName: recordName(prefix: "medication", id: medication.id), zoneID: groupRecord.recordID.zoneID))
-        record[Field.uuid] = medication.id.uuidString as CKRecordValue
-        record[Field.group] = CKRecord.Reference(recordID: groupRecord.recordID, action: .deleteSelf)
-        record.setParent(groupRecord)
-        record[Field.payload] = try JSONEncoder.cloud.encode(medication) as NSData
-        _ = try await modify(recordsToSave: [record], recordIDsToDelete: [], in: database)
-    }
-
-    func deleteMedication(_ medication: Medication, groupRecord: CKRecord, database: CKDatabase) async throws {
-        let recordID = CKRecord.ID(recordName: recordName(prefix: "medication", id: medication.id), zoneID: groupRecord.recordID.zoneID)
-        _ = try await modify(recordsToSave: [], recordIDsToDelete: [recordID], in: database)
-    }
-
-    func saveConfirmation(_ confirmation: DoseConfirmation, groupRecord: CKRecord, database: CKDatabase) async throws {
-        let record = CKRecord(recordType: RecordType.confirmation, recordID: CKRecord.ID(recordName: confirmationRecordName(eventId: confirmation.eventId), zoneID: groupRecord.recordID.zoneID))
-        record[Field.eventId] = confirmation.eventId as CKRecordValue
-        record[Field.medicationId] = confirmation.medicationId.uuidString as CKRecordValue
-        record[Field.group] = CKRecord.Reference(recordID: groupRecord.recordID, action: .deleteSelf)
-        record.setParent(groupRecord)
-        record[Field.payload] = try JSONEncoder.cloud.encode(confirmation) as NSData
-        _ = try await modify(recordsToSave: [record], recordIDsToDelete: [], in: database)
-    }
-
-    func fetchConfirmation(eventId: String, groupRecord: CKRecord, database: CKDatabase) async throws -> DoseConfirmation? {
-        let recordID = CKRecord.ID(recordName: confirmationRecordName(eventId: eventId), zoneID: groupRecord.recordID.zoneID)
-        do {
-            let record = try await fetchRecord(recordID: recordID, database: database)
-            return decodePayload(record, as: DoseConfirmation.self)
-        } catch {
-            if Self.isRecordMissing(error) {
-                return nil
-            }
-
-            throw error
-        }
-    }
-
-    func deleteConfirmation(eventId: String, groupRecord: CKRecord, database: CKDatabase) async throws {
-        let recordID = CKRecord.ID(recordName: confirmationRecordName(eventId: eventId), zoneID: groupRecord.recordID.zoneID)
-        _ = try await modify(recordsToSave: [], recordIDsToDelete: [recordID], in: database)
-    }
-
-    func installWorkspaceSubscription(groupRecord: CKRecord, database: CKDatabase, databaseScope: CKDatabase.Scope) async throws {
-        if databaseScope == .shared {
-            let subscription = CKDatabaseSubscription(subscriptionID: "shared-database-changes")
-            let info = CKSubscription.NotificationInfo()
-            info.shouldSendContentAvailable = true
-            subscription.notificationInfo = info
-            _ = try await save(subscription: subscription, in: database)
-            return
-        }
-
-        guard databaseScope == .private else { return }
-
-        let zoneID = groupRecord.recordID.zoneID
-        let subscriptionID = [
-            "workspace-zone",
-            Self.subscriptionIdentifierComponent(zoneID.ownerName),
-            Self.subscriptionIdentifierComponent(zoneID.zoneName)
-        ].joined(separator: "-")
-        let subscription = CKRecordZoneSubscription(
-            zoneID: zoneID,
-            subscriptionID: subscriptionID
-        )
-        let info = CKSubscription.NotificationInfo()
-        info.shouldSendContentAvailable = true
-        subscription.notificationInfo = info
-        _ = try await save(subscription: subscription, in: database)
-    }
-
-    func repairShareHierarchy(for snapshots: [CloudSnapshot]) async throws {
-        for snapshot in snapshots where snapshot.databaseScope == .private && snapshot.group.share != nil {
-            let linkedRecords = try await fetchLinkedRecords(group: snapshot.group, database: snapshot.database)
-            let recordsToRepair = linkedRecords.filter { $0.parent?.recordID != snapshot.group.recordID }
-            for record in recordsToRepair {
-                record.setParent(snapshot.group)
-            }
-
-            if !recordsToRepair.isEmpty {
-                _ = try await modify(recordsToSave: recordsToRepair, recordIDsToDelete: [], in: snapshot.database)
-            }
-        }
-    }
-
-    func prepareShare(groupRecord: CKRecord, database: CKDatabase, title: String) async throws -> CloudSharePreparation {
-        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let linkedRecords = try await fetchLinkedRecords(group: groupRecord, database: database)
-        for record in linkedRecords where record.parent?.recordID != groupRecord.recordID {
-            record.setParent(groupRecord)
-        }
-
-        if let existingShareReference = groupRecord.share {
-            let existingShareRecord = try await fetchRecord(recordID: existingShareReference.recordID, database: database)
-            guard let existingShare = existingShareRecord as? CKShare else {
-                throw CloudKitShareError.invalidExistingShare
-            }
-            if !cleanTitle.isEmpty {
-                existingShare[CKShare.SystemFieldKey.title] = cleanTitle as CKRecordValue
-            }
-            existingShare.publicPermission = .none
-            let saved = try await modify(recordsToSave: [existingShare] + linkedRecords, recordIDsToDelete: [], in: database)
-            let savedShare = saved.compactMap { $0 as? CKShare }.first ?? existingShare
-            return CloudSharePreparation(groupRecord: groupRecord, share: savedShare)
-        }
-
-        let share = CKShare(rootRecord: groupRecord)
-        if !cleanTitle.isEmpty {
-            share[CKShare.SystemFieldKey.title] = cleanTitle as CKRecordValue
-        }
-        share.publicPermission = .none
-        let saved = try await modify(recordsToSave: [groupRecord, share] + linkedRecords, recordIDsToDelete: [], in: database)
-        let savedGroup = saved.first(where: { $0.recordType == RecordType.group }) ?? groupRecord
-        let savedShare = saved.compactMap { $0 as? CKShare }.first ?? share
-        return CloudSharePreparation(groupRecord: savedGroup, share: savedShare)
-    }
-
-    func acceptShare(_ metadata: CKShare.Metadata) async throws -> StoredGroupReference {
-        _ = try await withCheckedThrowingContinuation { continuation in
-            let operation = CKAcceptSharesOperation(shareMetadatas: [metadata])
-            operation.acceptSharesResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume(returning: ())
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-            configure(operation)
-            container.add(operation)
-        }
-
-        guard let rootID = metadata.hierarchicalRootRecordID else {
-            throw CloudKitShareError.missingRootRecord
-        }
-        return StoredGroupReference(
-            recordName: rootID.recordName,
-            zoneName: rootID.zoneID.zoneName,
-            ownerName: rootID.zoneID.ownerName,
-            databaseScope: CKDatabase.Scope.shared.rawValue
-        )
-    }
-
-    private func fetchGroupSnapshots(in database: CKDatabase, databaseScope: CKDatabase.Scope, zones: [CKRecordZone.ID]) async throws -> [CloudSnapshot] {
-        var snapshots: [CloudSnapshot] = []
-
-        for zoneID in zones {
-            let records: [CKRecord]
-            do {
-                records = try await fetchRecordsInZone(zoneID: zoneID, database: database)
-            } catch {
-                if Self.isZoneNotFound(error) || Self.isRecordTypeMissing(error) {
-                    continue
-                }
-                throw error
-            }
-
-            let groups = records.filter { $0.recordType == RecordType.group }
-            for group in groups {
-                snapshots.append(snapshot(for: group, records: records, database: database, databaseScope: databaseScope))
-            }
-        }
-
-        return snapshots
-    }
-
-    private func snapshot(for group: CKRecord, database: CKDatabase, databaseScope: CKDatabase.Scope) async throws -> CloudSnapshot {
-        let members = try await fetchLinkedRecords(recordType: RecordType.member, group: group, database: database)
-        let medications = try await fetchLinkedRecords(recordType: RecordType.medication, group: group, database: database)
-        let confirmations = try await fetchLinkedRecords(recordType: RecordType.confirmation, group: group, database: database)
-
-        return CloudSnapshot(
-            group: group,
-            database: database,
-            databaseScope: databaseScope,
-            name: group[Field.name] as? String ?? "",
-            members: members.compactMap(member(from:)),
-            medications: medications.compactMap { decodePayload($0, as: Medication.self) },
-            confirmations: confirmations.compactMap { decodePayload($0, as: DoseConfirmation.self) }
-        )
-    }
-
-    private func snapshot(for group: CKRecord, records: [CKRecord], database: CKDatabase, databaseScope: CKDatabase.Scope) -> CloudSnapshot {
-        let linkedRecords = records.filter { isLinked(record: $0, to: group) }
-
-        return CloudSnapshot(
-            group: group,
-            database: database,
-            databaseScope: databaseScope,
-            name: group[Field.name] as? String ?? "",
-            members: linkedRecords.filter { $0.recordType == RecordType.member }.compactMap(member(from:)),
-            medications: linkedRecords.filter { $0.recordType == RecordType.medication }.compactMap { decodePayload($0, as: Medication.self) },
-            confirmations: linkedRecords.filter { $0.recordType == RecordType.confirmation }.compactMap { decodePayload($0, as: DoseConfirmation.self) }
-        )
-    }
-
-    private func workspaceScore(_ snapshot: CloudSnapshot) -> Int {
-        var score = 0
-        if isCanonicalPersonalWorkspace(snapshot) {
-            score += 10_000
-        }
-        score += snapshot.medications.count * 1_000
-        score += snapshot.confirmations.count * 100
-        score += snapshot.members.count * 10
-        if snapshot.databaseScope == .private {
-            score += 1
-        }
-        return score
-    }
-
-    private static func subscriptionIdentifierComponent(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        return value.unicodeScalars.map { scalar in
-            allowed.contains(scalar) ? String(scalar) : "_"
-        }.joined()
-    }
-
-    private func fetchLinkedRecords(group: CKRecord, database: CKDatabase) async throws -> [CKRecord] {
-        let records = try await fetchRecordsInZone(zoneID: group.recordID.zoneID, database: database)
-        return records.filter { isLinked(record: $0, to: group) }
-    }
-
-    private func fetchLinkedRecords(recordType: String, group: CKRecord, database: CKDatabase) async throws -> [CKRecord] {
-        let records = try await fetchRecordsInZone(zoneID: group.recordID.zoneID, database: database)
-            .filter { $0.recordType == recordType }
-        return records.filter { isLinked(record: $0, to: group) }
-    }
-
-    private func isLinked(record: CKRecord, to group: CKRecord) -> Bool {
-        guard record.recordID != group.recordID else { return false }
-
-        if let parentID = record.parent?.recordID,
-           Self.isSameLogicalRecord(parentID, as: group.recordID) {
-            return true
-        }
-
-        guard let reference = record[Field.group] as? CKRecord.Reference else {
-            return false
-        }
-
-        return Self.isSameLogicalRecord(reference.recordID, as: group.recordID)
-    }
-
-    private static func isSameLogicalRecord(_ lhs: CKRecord.ID, as rhs: CKRecord.ID) -> Bool {
-        lhs.recordName == rhs.recordName
-            && lhs.zoneID.zoneName == rhs.zoneID.zoneName
-    }
-
-    private func fetchRecordsInZone(zoneID: CKRecordZone.ID, database: CKDatabase) async throws -> [CKRecord] {
-        try await withCheckedThrowingContinuation { continuation in
-            var records: [CKRecord] = []
-            var zoneError: Error?
-            let configuration = CKFetchRecordZoneChangesOperation.ZoneConfiguration(
-                previousServerChangeToken: nil,
-                resultsLimit: nil,
-                desiredKeys: nil
-            )
-            let operation = CKFetchRecordZoneChangesOperation(
-                recordZoneIDs: [zoneID],
-                configurationsByRecordZoneID: [zoneID: configuration]
-            )
-            operation.fetchAllChanges = true
-            operation.recordWasChangedBlock = { _, result in
-                switch result {
-                case .success(let record):
-                    records.append(record)
-                case .failure(let error):
-                    zoneError = error
-                }
-            }
-            operation.recordZoneFetchResultBlock = { _, result in
-                if case .failure(let error) = result {
-                    zoneError = error
-                }
-            }
-            operation.fetchRecordZoneChangesResultBlock = { result in
-                switch result {
-                case .success:
-                    if let zoneError {
-                        continuation.resume(throwing: zoneError)
-                    } else {
-                        continuation.resume(returning: records)
-                    }
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-            configure(operation)
-            database.add(operation)
-        }
-    }
-
-    private func fetchRecord(recordID: CKRecord.ID, database: CKDatabase) async throws -> CKRecord {
-        try await withCheckedThrowingContinuation { continuation in
-            let operation = CKFetchRecordsOperation(recordIDs: [recordID])
-            operation.perRecordResultBlock = { _, result in
-                switch result {
-                case .success(let record):
-                    continuation.resume(returning: record)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-            operation.fetchRecordsResultBlock = { result in
-                if case .failure(let error) = result {
-                    continuation.resume(throwing: error)
-                }
-            }
-            configure(operation)
-            database.add(operation)
-        }
-    }
-
-    private func fetchAllZones(in database: CKDatabase) async throws -> [CKRecordZone] {
-        try await withCheckedThrowingContinuation { continuation in
-            var zones: [CKRecordZone] = []
-            let operation = CKFetchRecordZonesOperation.fetchAllRecordZonesOperation()
-            operation.perRecordZoneResultBlock = { _, result in
-                if case .success(let zone) = result {
-                    zones.append(zone)
-                }
-            }
-            operation.fetchRecordZonesResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume(returning: zones)
-                case .failure(let error):
-                    if Self.isZoneNotFound(error) {
-                        continuation.resume(returning: [])
-                    } else {
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-            configure(operation)
-            database.add(operation)
-        }
-    }
-
-    private func privateZoneExists() async throws -> Bool {
-        try await withCheckedThrowingContinuation { continuation in
-            var exists = false
-            var missingZone = false
-            var zoneError: Error?
-            let operation = CKFetchRecordZonesOperation(recordZoneIDs: [zoneID])
-            operation.perRecordZoneResultBlock = { _, result in
-                switch result {
-                case .success:
-                    exists = true
-                case .failure(let error):
-                    if Self.isZoneNotFound(error) {
-                        missingZone = true
-                    } else {
-                        zoneError = error
-                    }
-                }
-            }
-            operation.fetchRecordZonesResultBlock = { result in
-                switch result {
-                case .success:
-                    if let zoneError {
-                        continuation.resume(throwing: zoneError)
-                    } else {
-                        continuation.resume(returning: exists && !missingZone)
-                    }
-                case .failure(let error):
-                    if Self.isZoneNotFound(error) {
-                        continuation.resume(returning: false)
-                    } else {
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-            configure(operation)
-            privateDatabase.add(operation)
-        }
-    }
-
-    private static func isZoneNotFound(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        if nsError.domain == CKError.errorDomain, nsError.code == CKError.zoneNotFound.rawValue {
-            return true
-        }
-
-        if let partialErrors = nsError.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: NSError] {
-            return partialErrors.values.contains { $0.domain == CKError.errorDomain && $0.code == CKError.zoneNotFound.rawValue }
-        }
-
-        if let partialErrors = nsError.userInfo[CKPartialErrorsByItemIDKey] as? [CKRecordZone.ID: NSError] {
-            return partialErrors.values.contains { $0.domain == CKError.errorDomain && $0.code == CKError.zoneNotFound.rawValue }
-        }
-
-        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
-            return isZoneNotFound(underlying)
-        }
-
-        return false
-    }
-
-    private static func isRecordMissing(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        if nsError.domain == CKError.errorDomain, nsError.code == CKError.unknownItem.rawValue {
-            return true
-        }
-
-        if let partialErrors = nsError.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: NSError] {
-            return partialErrors.values.contains { $0.domain == CKError.errorDomain && $0.code == CKError.unknownItem.rawValue }
-        }
-
-        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
-            return isRecordMissing(underlying)
-        }
-
-        return false
-    }
-
-    private static func isRecordTypeMissing(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        if nsError.domain == CKError.errorDomain,
-           nsError.code == CKError.unknownItem.rawValue,
-           nsError.localizedDescription.localizedCaseInsensitiveContains("record type") {
-            return true
-        }
-
-        if nsError.localizedDescription.localizedCaseInsensitiveContains("did not find record type") {
-            return true
-        }
-
-        if let partialErrors = nsError.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: NSError] {
-            return partialErrors.values.contains(where: isRecordTypeMissing)
-        }
-
-        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
-            return isRecordTypeMissing(underlying)
-        }
-
-        return false
-    }
-
-    private func modify(recordsToSave: [CKRecord], recordIDsToDelete: [CKRecord.ID], in database: CKDatabase) async throws -> [CKRecord] {
-        try await withCheckedThrowingContinuation { continuation in
-            var saved: [CKRecord] = []
-            let operation = CKModifyRecordsOperation(recordsToSave: recordsToSave, recordIDsToDelete: recordIDsToDelete)
-            operation.savePolicy = .changedKeys
-            operation.isAtomic = true
-            operation.perRecordSaveBlock = { _, result in
-                if case .success(let record) = result {
-                    saved.append(record)
-                }
-            }
-            operation.modifyRecordsResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume(returning: saved)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-            configure(operation)
-            database.add(operation)
-        }
-    }
-
-    private func modify(recordsToSave: [CKRecordZone], recordIDsToDelete: [CKRecordZone.ID], in database: CKDatabase) async throws -> [CKRecordZone] {
-        try await withCheckedThrowingContinuation { continuation in
-            var saved: [CKRecordZone] = []
-            let operation = CKModifyRecordZonesOperation(recordZonesToSave: recordsToSave, recordZoneIDsToDelete: recordIDsToDelete)
-            operation.perRecordZoneSaveBlock = { _, result in
-                if case .success(let zone) = result {
-                    saved.append(zone)
-                }
-            }
-            operation.modifyRecordZonesResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume(returning: saved)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-            configure(operation)
-            database.add(operation)
-        }
-    }
-
-    private func save(subscription: CKSubscription, in database: CKDatabase) async throws -> CKSubscription {
-        try await withCheckedThrowingContinuation { continuation in
-            var savedSubscription: CKSubscription?
-            let operation = CKModifySubscriptionsOperation(subscriptionsToSave: [subscription], subscriptionIDsToDelete: [])
-            operation.perSubscriptionSaveBlock = { _, result in
-                if case .success(let subscription) = result {
-                    savedSubscription = subscription
-                }
-            }
-            operation.modifySubscriptionsResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume(returning: savedSubscription ?? subscription)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-            configure(operation)
-            database.add(operation)
-        }
-    }
-
-    private func configure(_ operation: CKOperation) {
-        let configuration = CKOperation.Configuration()
-        configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 35
-        operation.configuration = configuration
-    }
-
-    private func database(for scope: CKDatabase.Scope) -> CKDatabase {
-        switch scope {
-        case .private:
-            return privateDatabase
-        case .shared:
-            return sharedDatabase
-        case .public:
-            return container.publicCloudDatabase
-        @unknown default:
-            return privateDatabase
-        }
-    }
-
-    func isCanonicalPersonalReference(_ reference: StoredGroupReference) -> Bool {
-        reference.databaseScope == CKDatabase.Scope.private.rawValue
-            && reference.recordName == personalWorkspaceRecordName
-            && reference.zoneName == zoneID.zoneName
-    }
-
-    private func memberRecord(_ member: CareMember, groupRecord: CKRecord) -> CKRecord {
-        let record = CKRecord(recordType: RecordType.member, recordID: CKRecord.ID(recordName: recordName(prefix: "member", id: member.id), zoneID: groupRecord.recordID.zoneID))
-        record[Field.uuid] = member.id.uuidString as CKRecordValue
-        record[Field.displayName] = member.displayName as CKRecordValue
-        record[Field.colorHex] = member.colorHex as CKRecordValue
-        if let userRecordName = member.userRecordName {
-            record[Field.userRecordName] = userRecordName as CKRecordValue
-        }
-        record[Field.group] = CKRecord.Reference(recordID: groupRecord.recordID, action: .deleteSelf)
-        record.setParent(groupRecord)
-        return record
-    }
-
-    private func member(from record: CKRecord) -> CareMember? {
-        guard
-            let uuidString = record[Field.uuid] as? String,
-            let id = UUID(uuidString: uuidString),
-            let displayName = record[Field.displayName] as? String,
-            let colorHex = record[Field.colorHex] as? String
-        else {
-            return nil
-        }
-        return CareMember(
-            id: id,
-            displayName: displayName,
-            colorHex: colorHex,
-            userRecordName: record[Field.userRecordName] as? String
-        )
-    }
-
-    private func decodePayload<T: Decodable>(_ record: CKRecord, as type: T.Type) -> T? {
-        guard let data = record[Field.payload] as? Data else { return nil }
-        return try? JSONDecoder.cloud.decode(type, from: data)
-    }
-
-    private func recordName(prefix: String, id: UUID) -> String {
-        "\(prefix)-\(id.uuidString)"
-    }
-
-    private func confirmationRecordName(eventId: String) -> String {
-        "confirmation-\(eventId)"
-    }
-}
-
-private enum RecordType {
-    static let group = "CareGroup"
-    static let member = "CareMember"
-    static let medication = "Medication"
-    static let confirmation = "DoseConfirmation"
-}
-
-private enum Field {
-    static let name = "name"
-    static let uuid = "uuid"
-    static let displayName = "displayName"
-    static let colorHex = "colorHex"
-    static let userRecordName = "userRecordName"
-    static let group = "group"
-    static let payload = "payload"
-    static let eventId = "eventId"
-    static let medicationId = "medicationId"
-}
-
-private extension JSONEncoder {
-    static var cloud: JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
-    }
-}
-
-private extension JSONDecoder {
-    static var cloud: JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import PillCore
 
 struct HistoryView: View {
     @EnvironmentObject private var store: MedicationStore

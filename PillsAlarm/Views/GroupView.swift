@@ -1,4 +1,5 @@
 import SwiftUI
+import PillCore
 
 struct GroupView: View {
     @EnvironmentObject private var store: MedicationStore

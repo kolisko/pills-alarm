@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import PillCore
 
 struct SettingsView: View {
     var body: some View {

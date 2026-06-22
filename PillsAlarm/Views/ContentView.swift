@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import PillCore
 
 struct ContentView: View {
     @EnvironmentObject private var store: MedicationStore

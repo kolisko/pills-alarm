@@ -1,18 +1,26 @@
 import Foundation
 
-struct MedicationStateEntry: Hashable {
-    var medication: Medication
-    var workspaceId: String
-    var source: WorkspaceSource
+public struct MedicationStateEntry: Hashable, Sendable {
+    public var medication: Medication
+    public var workspaceId: String
+    public var source: WorkspaceSource
+
+    public init(medication: Medication, workspaceId: String, source: WorkspaceSource) {
+        self.medication = medication
+        self.workspaceId = workspaceId
+        self.source = source
+    }
 }
 
-final class MedicationDomainStore {
+public final class MedicationDomainStore {
     private var medicationsById: [UUID: Medication] = [:]
     private var medicationWorkspaceIdsById: [UUID: String] = [:]
     private var medicationSourcesById: [UUID: WorkspaceSource] = [:]
     private let confirmationState = ConfirmationStateStore()
 
-    var medicationItems: [MedicationListItem] {
+    public init() {}
+
+    public var medicationItems: [MedicationListItem] {
         medicationsById.values
             .compactMap { medication -> MedicationListItem? in
                 guard let source = medicationSourcesById[medication.id] else { return nil }
@@ -21,46 +29,46 @@ final class MedicationDomainStore {
             .sorted(by: Self.sortMedicationItems)
     }
 
-    var medications: [Medication] {
+    public var medications: [Medication] {
         medicationItems.map(\.medication)
     }
 
-    var confirmations: [String: DoseConfirmation] {
+    public var confirmations: [String: DoseConfirmation] {
         confirmationState.confirmations
     }
 
-    var confirmationItems: [ConfirmationListItem] {
+    public var confirmationItems: [ConfirmationListItem] {
         confirmationState.confirmationItems
     }
 
-    var allConfirmations: [DoseConfirmation] {
+    public var allConfirmations: [DoseConfirmation] {
         confirmationState.allConfirmations
     }
 
-    func workspaceId(forMedicationId medicationId: UUID) -> String? {
+    public func workspaceId(forMedicationId medicationId: UUID) -> String? {
         medicationWorkspaceIdsById[medicationId]
     }
 
-    func workspaceId(forConfirmationEventId eventId: String) -> String? {
+    public func workspaceId(forConfirmationEventId eventId: String) -> String? {
         confirmationState.workspaceId(for: eventId)
     }
 
-    func confirmation(for dose: GeneratedDose) -> DoseConfirmation? {
+    public func confirmation(for dose: GeneratedDose) -> DoseConfirmation? {
         confirmationState.confirmation(for: dose)
     }
 
-    func confirmations(forMedicationId medicationId: UUID, in workspaceId: String) -> [DoseConfirmation] {
+    public func confirmations(forMedicationId medicationId: UUID, in workspaceId: String) -> [DoseConfirmation] {
         confirmationState.confirmations(for: medicationId, in: workspaceId)
     }
 
-    func reset() {
+    public func reset() {
         medicationsById = [:]
         medicationWorkspaceIdsById = [:]
         medicationSourcesById = [:]
         confirmationState.reset()
     }
 
-    func replace(medications: [MedicationStateEntry], confirmations: [ConfirmationStateEntry]) {
+    public func replace(medications: [MedicationStateEntry], confirmations: [ConfirmationStateEntry]) {
         reset()
         for entry in medications {
             upsertMedication(entry.medication, workspaceId: entry.workspaceId, source: entry.source)
@@ -70,31 +78,31 @@ final class MedicationDomainStore {
         }
     }
 
-    func upsertMedication(_ medication: Medication, workspaceId: String, source: WorkspaceSource) {
+    public func upsertMedication(_ medication: Medication, workspaceId: String, source: WorkspaceSource) {
         medicationsById[medication.id] = medication
         medicationWorkspaceIdsById[medication.id] = workspaceId
         medicationSourcesById[medication.id] = source
     }
 
-    func removeMedication(id: UUID) {
+    public func removeMedication(id: UUID) {
         medicationsById.removeValue(forKey: id)
         medicationWorkspaceIdsById.removeValue(forKey: id)
         medicationSourcesById.removeValue(forKey: id)
     }
 
-    func upsertConfirmation(_ confirmation: DoseConfirmation, workspaceId: String, source: WorkspaceSource) {
+    public func upsertConfirmation(_ confirmation: DoseConfirmation, workspaceId: String, source: WorkspaceSource) {
         confirmationState.upsert(confirmation, workspaceId: workspaceId, source: source)
     }
 
-    func removeConfirmations(eventIds: [String]) {
+    public func removeConfirmations(eventIds: [String]) {
         confirmationState.remove(eventIds: eventIds)
     }
 
-    func removeConfirmations(forMedicationId medicationId: UUID) {
+    public func removeConfirmations(forMedicationId medicationId: UUID) {
         confirmationState.removeConfirmations(forMedicationId: medicationId)
     }
 
-    func applySharingChange(
+    public func applySharingChange(
         medication: Medication,
         updatedConfirmations: [DoseConfirmation],
         originalConfirmationEventIds: [String],

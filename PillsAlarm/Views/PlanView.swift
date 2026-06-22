@@ -1,4 +1,5 @@
 import SwiftUI
+import PillCore
 
 struct PlanView: View {
     @EnvironmentObject private var store: MedicationStore
@@ -437,6 +438,8 @@ struct PillAmountVisualization: View {
     var amount: Double
     var isActiveDose = false
     var doseColor: Color = .secondary
+    @State private var deactivationStartDate: Date?
+    @State private var deactivationStartPulse = 0.0
 
     private var normalizedAmount: Double {
         DoseAmountFormatter.normalized(amount)
@@ -455,42 +458,10 @@ struct PillAmountVisualization: View {
     }
 
     var body: some View {
-        HStack(spacing: 5) {
-            if quarters == 0 {
-                EmptyDoseIcon()
-                    .frame(width: 32, height: 28)
-            } else {
-                if wholeCount >= 3 {
-                    StackedPillIcon(count: wholeCount, color: doseColor)
-                        .frame(width: 38, height: 34)
-                } else {
-                    ForEach(0..<wholeCount, id: \.self) { _ in
-                        PillPortionIcon(fraction: 1, color: doseColor, showsOutline: false)
-                            .frame(width: 30, height: 30)
-                    }
-                }
-
-                if fraction > 0 {
-                    PillPortionIcon(fraction: fraction, color: doseColor, showsOutline: true)
-                        .frame(width: 30, height: 30)
-                }
-            }
-        }
-        .frame(height: 32)
-        .modifier(ActiveDoseIconEffect(isActive: isActiveDose))
-    }
-}
-
-private struct ActiveDoseIconEffect: ViewModifier {
-    var isActive: Bool
-    @State private var deactivationStartDate: Date?
-    @State private var deactivationStartPulse = 0.0
-
-    func body(content: Content) -> some View {
         TimelineView(.animation) { context in
-            let pulse = pulseValue(at: context.date)
+            let pulse = activePulseValue(at: context.date)
 
-            content
+            pillStack(activeFillProgress: pulse)
                 .scaleEffect(1 + 0.08 * pulse)
                 .opacity(1 - 0.28 * pulse)
                 .shadow(color: Color.teal.opacity(0.22 * pulse), radius: 4, y: 1)
@@ -498,7 +469,7 @@ private struct ActiveDoseIconEffect: ViewModifier {
                     transaction.animation = nil
                 }
         }
-        .onChange(of: isActive) { _, newValue in
+        .onChange(of: isActiveDose) { _, newValue in
             if newValue {
                 deactivationStartDate = nil
                 deactivationStartPulse = 0
@@ -509,8 +480,8 @@ private struct ActiveDoseIconEffect: ViewModifier {
         }
     }
 
-    private func pulseValue(at date: Date) -> Double {
-        if isActive {
+    private func activePulseValue(at date: Date) -> Double {
+        if isActiveDose {
             return activePulse(at: date)
         }
 
@@ -524,28 +495,75 @@ private struct ActiveDoseIconEffect: ViewModifier {
         let progress = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
         return (sin(progress * 2 * .pi - .pi / 2) + 1) / 2
     }
+
+    @ViewBuilder
+    private func pillStack(activeFillProgress: Double) -> some View {
+        HStack(spacing: 5) {
+            if quarters == 0 {
+                EmptyDoseIcon()
+                    .frame(width: 32, height: 28)
+            } else {
+                if wholeCount >= 3 {
+                    StackedPillIcon(count: wholeCount, color: doseColor, activeFillProgress: activeFillProgress)
+                        .frame(width: 38, height: 34)
+                } else {
+                    ForEach(0..<wholeCount, id: \.self) { _ in
+                        PillPortionIcon(
+                            fraction: 1,
+                            color: doseColor,
+                            showsOutline: false,
+                            activeFillProgress: activeFillProgress
+                        )
+                            .frame(width: 30, height: 30)
+                    }
+                }
+
+                if fraction > 0 {
+                    PillPortionIcon(
+                        fraction: fraction,
+                        color: doseColor,
+                        showsOutline: true,
+                        activeFillProgress: activeFillProgress
+                    )
+                        .frame(width: 30, height: 30)
+                }
+            }
+        }
+        .frame(height: 32)
+    }
 }
 
 private struct PillPortionIcon: View {
     var fraction: Double
     var color: Color
     var showsOutline: Bool
+    var activeFillProgress = 0.0
 
     var body: some View {
         GeometryReader { proxy in
             let diameter = min(proxy.size.width, proxy.size.height)
             let normalizedFraction = min(max(fraction, 0), 1)
             let strokeWidth = max(diameter * 0.1, 2)
+            let fillScale = 0.42 + 0.58 * activeFillProgress
+            let fillOpacity = 0.26 * activeFillProgress
 
             ZStack {
                 if normalizedFraction > 0 {
                     if normalizedFraction >= 1 {
+                        Circle()
+                            .fill(color.opacity(fillOpacity))
+                            .scaleEffect(fillScale)
+
                         Circle()
                             .stroke(
                                 color.opacity(0.95),
                                 style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
                             )
                     } else {
+                        CircleSegmentShape(fraction: normalizedFraction)
+                            .fill(color.opacity(fillOpacity))
+                            .scaleEffect(fillScale, anchor: .center)
+
                         CircleSegmentShape(fraction: normalizedFraction)
                             .stroke(
                                 color.opacity(0.95),
@@ -614,18 +632,34 @@ private struct EmptyDoseIcon: View {
 private struct StackedPillIcon: View {
     var count: Int
     var color: Color
+    var activeFillProgress = 0.0
 
     var body: some View {
         ZStack {
-            PillPortionIcon(fraction: 1, color: color, showsOutline: false)
+            PillPortionIcon(
+                fraction: 1,
+                color: color,
+                showsOutline: false,
+                activeFillProgress: activeFillProgress
+            )
                 .opacity(0.28)
                 .offset(x: -5, y: 4)
 
-            PillPortionIcon(fraction: 1, color: color, showsOutline: false)
+            PillPortionIcon(
+                fraction: 1,
+                color: color,
+                showsOutline: false,
+                activeFillProgress: activeFillProgress
+            )
                 .opacity(0.48)
                 .offset(x: -2, y: 2)
 
-            PillPortionIcon(fraction: 1, color: color, showsOutline: false)
+            PillPortionIcon(
+                fraction: 1,
+                color: color,
+                showsOutline: false,
+                activeFillProgress: activeFillProgress
+            )
                 .overlay {
                     Text("\(count)×")
                         .font(.caption.weight(.black).monospacedDigit())
