@@ -4,6 +4,21 @@ Pill Care is a SwiftUI iPhone app for coordinating medication schedules and dose
 
 The app is built around a simple rule: CloudKit is the source of truth. Dose confirmations, skipped doses, shared care groups, and shared medication plans are stored as CloudKit records and synchronized across devices instead of being treated as local-only state.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><strong>Today</strong></td>
+    <td align="center"><strong>Plans</strong></td>
+    <td align="center"><strong>Settings</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/today.png" alt="Today screen" width="240"></td>
+    <td><img src="docs/screenshots/plans.png" alt="Medication plans screen" width="240"></td>
+    <td><img src="docs/screenshots/settings.png" alt="Settings screen" width="240"></td>
+  </tr>
+</table>
+
 ## Features
 
 - Create private medication plans with multiple daily dose times and phased dosing.
