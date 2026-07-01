@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build And Test
+    runs-on: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Test PillCore
+        run: swift test --package-path Packages/PillCore
+
+      - name: Test iOS app
+        run: |
+          xcodebuild test \
+            -project PillsAlarm.xcodeproj \
+            -scheme PillsAlarm \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest'
