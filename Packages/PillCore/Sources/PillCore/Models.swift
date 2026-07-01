@@ -100,10 +100,25 @@ public struct PlanPhase: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public enum MedicationForm: String, Codable, CaseIterable, Identifiable, Sendable {
+    case tablet
+    case syrup
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .tablet: "Tableta"
+        case .syrup: "Sirup"
+        }
+    }
+}
+
 public struct Medication: Identifiable, Codable, Hashable, Sendable {
     public var id: UUID
     public var name: String
     public var note: String
+    public var form: MedicationForm
     public var colorHex: String
     public var startDate: Date
     public var doseTimes: [DoseTime]
@@ -119,6 +134,7 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
         id: UUID = UUID(),
         name: String,
         note: String,
+        form: MedicationForm = .tablet,
         colorHex: String,
         startDate: Date,
         doseTimes: [DoseTime],
@@ -129,6 +145,7 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
         self.id = id
         self.name = name
         self.note = note
+        self.form = form
         self.colorHex = colorHex
         self.startDate = startDate
         self.doseTimes = doseTimes
@@ -141,6 +158,7 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
         case id
         case name
         case note
+        case form
         case colorHex
         case startDate
         case doseTimes
@@ -154,6 +172,7 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         note = try container.decode(String.self, forKey: .note)
+        form = try container.decodeIfPresent(MedicationForm.self, forKey: .form) ?? .tablet
         colorHex = try container.decode(String.self, forKey: .colorHex)
         startDate = try container.decode(Date.self, forKey: .startDate)
         doseTimes = try container.decode([DoseTime].self, forKey: .doseTimes)
@@ -223,6 +242,7 @@ public struct GeneratedDose: Identifiable, Hashable, Sendable {
     public var medicationName: String
     public var medicationNote: String
     public var medicationColorHex: String
+    public var medicationForm: MedicationForm
     public var timeId: UUID
     public var timeLabel: String
     public var scheduledDate: Date
@@ -240,6 +260,7 @@ public struct GeneratedDose: Identifiable, Hashable, Sendable {
         medicationName: String,
         medicationNote: String,
         medicationColorHex: String,
+        medicationForm: MedicationForm = .tablet,
         timeId: UUID,
         timeLabel: String,
         scheduledDate: Date,
@@ -256,6 +277,7 @@ public struct GeneratedDose: Identifiable, Hashable, Sendable {
         self.medicationName = medicationName
         self.medicationNote = medicationNote
         self.medicationColorHex = medicationColorHex
+        self.medicationForm = medicationForm
         self.timeId = timeId
         self.timeLabel = timeLabel
         self.scheduledDate = scheduledDate
@@ -269,6 +291,16 @@ public enum DoseAmountFormatter {
     public static func normalized(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         return max(0, (value * 4).rounded() / 4)
+    }
+
+    public static func normalized(_ value: Double, for form: MedicationForm) -> Double {
+        switch form {
+        case .tablet:
+            return normalized(value)
+        case .syrup:
+            guard value.isFinite else { return 0 }
+            return max(0, (value * 10).rounded() / 10)
+        }
     }
 
     public static func value(from text: String) -> Double {
@@ -298,6 +330,20 @@ public enum DoseAmountFormatter {
         return normalized(fractionValue(from: clean) ?? 0)
     }
 
+    public static func value(from text: String, for form: MedicationForm) -> Double {
+        switch form {
+        case .tablet:
+            return value(from: text)
+        case .syrup:
+            let clean = text
+                .lowercased()
+                .replacingOccurrences(of: "ml", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: ",", with: ".")
+            return normalized(Double(clean) ?? 0, for: .syrup)
+        }
+    }
+
     public static func displayText(for value: Double) -> String {
         let normalizedValue = normalized(value)
         let quarters = Int((normalizedValue * 4).rounded())
@@ -321,6 +367,19 @@ public enum DoseAmountFormatter {
         }
 
         return fractionText.isEmpty ? "\(whole)" : "\(whole) \(fractionText)"
+    }
+
+    public static func displayText(for value: Double, form: MedicationForm) -> String {
+        switch form {
+        case .tablet:
+            return displayText(for: value)
+        case .syrup:
+            let amount = normalized(value, for: .syrup)
+            if amount.rounded() == amount {
+                return "\(Int(amount))ml"
+            }
+            return "\(String(format: "%.1f", amount).replacingOccurrences(of: ".", with: ","))ml"
+        }
     }
 
     private static func fractionValue(from text: String) -> Double? {

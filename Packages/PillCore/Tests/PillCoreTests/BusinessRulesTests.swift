@@ -184,8 +184,56 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(medication.doseTimes.map(\.label), ["Ráno", "Poledne", "Večer"])
         XCTAssertEqual(medication.phases.first?.title, "Základní dávkování")
         XCTAssertEqual(medication.phases.first?.doses.map(\.amount), [0, 0, 0])
+        XCTAssertEqual(medication.form, .tablet)
         XCTAssertNil(medication.ownerUserRecordName)
         XCTAssertNil(medication.sharedGroupId)
+    }
+
+    func testMedicationDecodingDefaultsMissingFormToTablet() throws {
+        let data = """
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "name": "Vitamin",
+          "note": "",
+          "colorHex": "#2F80ED",
+          "startDate": 1725753600,
+          "doseTimes": [],
+          "phases": []
+        }
+        """.data(using: .utf8)!
+
+        let medication = try JSONDecoder().decode(Medication.self, from: data)
+
+        XCTAssertEqual(medication.form, .tablet)
+    }
+
+    func testScheduleEngineGeneratesSyrupDoseWithMilliliterAmount() {
+        let time = DoseTime(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            label: "Ráno",
+            time: TimeOfDay(hour: 7, minute: 0)
+        )
+        let medication = Medication(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            name: "Sirup",
+            note: "",
+            form: .syrup,
+            colorHex: "#2F80ED",
+            startDate: Date(timeIntervalSince1970: 1_725_753_600),
+            doseTimes: [time],
+            phases: [
+                PlanPhase(
+                    title: "Základní dávkování",
+                    durationDays: nil,
+                    doses: [DoseEntry(timeId: time.id, amount: 6)]
+                )
+            ]
+        )
+
+        let doses = ScheduleEngine.doses(on: Date(timeIntervalSince1970: 1_725_776_400), medication: medication)
+
+        XCTAssertEqual(doses.map(\.amount), ["6ml"])
+        XCTAssertEqual(doses.first?.medicationForm, .syrup)
     }
 
     func testMemberIdentityRulesKeepLegacyPersonalMemberWhenClaimingOldConfirmations() {

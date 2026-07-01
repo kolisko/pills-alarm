@@ -30,7 +30,7 @@ public enum ScheduleEngine {
                 return nil
             }
 
-            let amount = DoseAmountFormatter.normalized(entry.amount)
+            let amount = DoseAmountFormatter.normalized(entry.amount, for: medication.form)
             guard amount > 0 else {
                 return nil
             }
@@ -53,11 +53,12 @@ public enum ScheduleEngine {
                 medicationName: medication.name,
                 medicationNote: medication.note,
                 medicationColorHex: medication.colorHex,
+                medicationForm: medication.form,
                 timeId: doseTime.id,
                 timeLabel: doseTime.label,
                 scheduledDate: scheduledDate,
                 scheduledTime: doseTime.time,
-                amount: DoseAmountFormatter.displayText(for: amount),
+                amount: DoseAmountFormatter.displayText(for: amount, form: medication.form),
                 phaseTitle: phase.title
             )
         }

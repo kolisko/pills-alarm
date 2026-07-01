@@ -3,14 +3,16 @@ import Foundation
 
 enum WorkspaceSyncMode {
     case incremental
-    case fullRecovery
+    case fullRecovery(repairShareHierarchy: Bool)
 }
 
 struct WorkspaceSyncResult {
     var snapshots: [CloudSnapshot]
     var hasDataChanges: Bool
     var didFullRecovery: Bool
+    var shouldRepairShareHierarchy: Bool
     var subscriptionSnapshots: [CloudSnapshot]
+    var zoneTokensToCommit: [StoredGroupReference: CKServerChangeToken] = [:]
 }
 
 struct ZoneChanges {
@@ -31,7 +33,7 @@ struct PrivateZoneSnapshotResult {
 
 final class ZoneChangeTokenStore {
     private let defaults: UserDefaults
-    private let defaultsKey = "PillCareZoneChangeTokens.v1"
+    private let defaultsKey = "PillCareZoneChangeTokens.v2"
     private var tokenDataByZoneKey: [String: Data]
 
     init(defaults: UserDefaults) {

@@ -49,7 +49,7 @@ struct GroupView: View {
                     diagnosticsSection
                 }
                 .refreshable {
-                    await store.reload(showSyncIndicator: false)
+                    await store.reload(showSyncIndicator: false, forceFullRecovery: true)
                 }
             }
             .sheet(item: $sharingController) { controller in

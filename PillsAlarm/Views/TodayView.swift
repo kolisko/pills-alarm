@@ -426,7 +426,7 @@ private struct TodayDoseList: View {
             }
         }
         .refreshable {
-            await store.reload(showSyncIndicator: false)
+            await store.reload(showSyncIndicator: false, forceFullRecovery: true)
         }
     }
 }
@@ -500,10 +500,12 @@ private struct DoseRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     PillAmountVisualization(
-                        amount: DoseAmountFormatter.value(from: dose.amount),
+                        amount: DoseAmountFormatter.value(from: dose.amount, for: dose.medicationForm),
+                        medicationForm: dose.medicationForm,
                         isActiveDose: state.showsActions,
                         doseColor: state.isSubdued ? .secondary : .primary
                     )
+                        .frame(width: 118, alignment: .trailing)
                         .accessibilityLabel("Dávka \(dose.amount)")
                 }
                 .accessibilityElement(children: .combine)

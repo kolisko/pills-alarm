@@ -120,7 +120,7 @@ final class MedicationStore: ObservableObject {
         NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
     }
 
-    func reload(showSyncIndicator: Bool = true) async {
+    func reload(showSyncIndicator: Bool = true, forceFullRecovery: Bool = false) async {
         if showSyncIndicator {
             beginSync()
         }
@@ -153,13 +153,20 @@ final class MedicationStore: ObservableObject {
             try await cloud.ensurePrivateZone()
             guard generation == loadGeneration else { return }
 
-            let requestedMode: WorkspaceSyncMode = hasLoadedCloudState ? .incremental : .fullRecovery
+            let requestedMode: WorkspaceSyncMode
+            if !hasLoadedCloudState {
+                requestedMode = .fullRecovery(repairShareHierarchy: true)
+            } else if forceFullRecovery {
+                requestedMode = .fullRecovery(repairShareHierarchy: false)
+            } else {
+                requestedMode = .incremental
+            }
             let syncResult = try await loadWorkspaceSnapshots(mode: requestedMode)
             let resolvedSnapshots = syncResult.snapshots
 
             guard generation == loadGeneration else { return }
 
-            if syncResult.didFullRecovery {
+            if syncResult.shouldRepairShareHierarchy {
                 try await cloud.repairShareHierarchy(for: resolvedSnapshots)
                 guard generation == loadGeneration else { return }
             }
@@ -167,6 +174,9 @@ final class MedicationStore: ObservableObject {
             if syncResult.hasDataChanges {
                 apply(snapshots: resolvedSnapshots)
                 hasLoadedCloudState = true
+            }
+            for (reference, token) in syncResult.zoneTokensToCommit {
+                zoneChangeTokens.set(token, for: reference)
             }
 
             var subscriptionError: Error?
@@ -770,18 +780,19 @@ final class MedicationStore: ObservableObject {
         workspaceCandidates = []
 
         switch mode {
-        case .fullRecovery:
-            return try await loadFullWorkspaceSnapshots()
+        case .fullRecovery(let repairShareHierarchy):
+            return try await loadFullWorkspaceSnapshots(repairShareHierarchy: repairShareHierarchy)
         case .incremental:
             return try await loadIncrementalWorkspaceSnapshots()
         }
     }
 
-    private func loadFullWorkspaceSnapshots() async throws -> WorkspaceSyncResult {
+    private func loadFullWorkspaceSnapshots(repairShareHierarchy: Bool) async throws -> WorkspaceSyncResult {
         let privateZoneResult = try await cloud.fetchPrivateGroupSnapshotsEnsuringPersonalWorkspace()
+        var zoneTokensToCommit: [StoredGroupReference: CKServerChangeToken] = [:]
         for snapshot in privateZoneResult.snapshots {
             if let serverChangeToken = privateZoneResult.serverChangeToken {
-                zoneChangeTokens.set(serverChangeToken, for: Self.storedGroupReference(from: snapshot))
+                zoneTokensToCommit[Self.storedGroupReference(from: snapshot)] = serverChangeToken
             }
         }
 
@@ -808,7 +819,7 @@ final class MedicationStore: ObservableObject {
             }
 
             if let serverChangeToken = result.serverChangeToken {
-                zoneChangeTokens.set(serverChangeToken, for: reference)
+                zoneTokensToCommit[reference] = serverChangeToken
             }
             snapshots.append(snapshot)
             seenIds.insert(reference.id)
@@ -825,7 +836,9 @@ final class MedicationStore: ObservableObject {
             snapshots: snapshots,
             hasDataChanges: true,
             didFullRecovery: true,
-            subscriptionSnapshots: snapshots
+            shouldRepairShareHierarchy: repairShareHierarchy,
+            subscriptionSnapshots: snapshots,
+            zoneTokensToCommit: zoneTokensToCommit
         )
     }
 
@@ -836,6 +849,7 @@ final class MedicationStore: ObservableObject {
         var subscriptionSnapshots: [CloudSnapshot] = []
         var hasDataChanges = false
         var didFullRecovery = false
+        var zoneTokensToCommit: [StoredGroupReference: CKServerChangeToken] = [:]
 
         var references = contexts.values.map(\.reference)
         let acceptedReferences = loadAcceptedSharedGroupReferences().filter {
@@ -862,7 +876,7 @@ final class MedicationStore: ObservableObject {
                     throw CloudKitShareError.acceptedShareUnavailable(reference.id)
                 }
                 if let serverChangeToken = result.serverChangeToken {
-                    zoneChangeTokens.set(serverChangeToken, for: reference)
+                    zoneTokensToCommit[reference] = serverChangeToken
                 }
                 let newContext = WorkspaceContext(snapshot: snapshot)
                 contexts[reference.id] = newContext
@@ -880,7 +894,7 @@ final class MedicationStore: ObservableObject {
                     continue
                 }
                 if let serverChangeToken = result.serverChangeToken {
-                    zoneChangeTokens.set(serverChangeToken, for: reference)
+                    zoneTokensToCommit[reference] = serverChangeToken
                 }
                 contexts[reference.id] = WorkspaceContext(snapshot: snapshot)
                 subscriptionSnapshots.append(snapshot)
@@ -893,7 +907,7 @@ final class MedicationStore: ObservableObject {
                 let changes = try await cloud.fetchZoneChanges(reference: reference, previousServerChangeToken: token)
 
                 if let serverChangeToken = changes.serverChangeToken {
-                    zoneChangeTokens.set(serverChangeToken, for: reference)
+                    zoneTokensToCommit[reference] = serverChangeToken
                 }
 
                 guard !changes.changedRecords.isEmpty || !changes.deletedRecordIDs.isEmpty else {
@@ -919,7 +933,7 @@ final class MedicationStore: ObservableObject {
                     continue
                 }
                 if let serverChangeToken = result.serverChangeToken {
-                    zoneChangeTokens.set(serverChangeToken, for: reference)
+                    zoneTokensToCommit[reference] = serverChangeToken
                 }
                 contexts[reference.id] = WorkspaceContext(snapshot: snapshot)
                 subscriptionSnapshots.append(snapshot)
@@ -951,7 +965,9 @@ final class MedicationStore: ObservableObject {
             snapshots: snapshots,
             hasDataChanges: hasDataChanges,
             didFullRecovery: didFullRecovery,
-            subscriptionSnapshots: subscriptionSnapshots
+            shouldRepairShareHierarchy: didFullRecovery,
+            subscriptionSnapshots: subscriptionSnapshots,
+            zoneTokensToCommit: zoneTokensToCommit
         )
     }
 
@@ -1019,7 +1035,11 @@ final class MedicationStore: ObservableObject {
             ?? personalContext?.source
 
         if let resolvedSource,
-           let workspaceId = domainState.workspaceId(forMedicationId: medication.id) ?? personalContext?.id {
+           let workspaceId = source?.id ?? domainState.workspaceId(forMedicationId: medication.id) ?? personalContext?.id {
+            if workspaceContexts[workspaceId] != nil {
+                workspaceContexts[workspaceId]?.medications.removeAll { $0.id == medication.id }
+                workspaceContexts[workspaceId]?.medications.append(medication)
+            }
             domainState.upsertMedication(medication, workspaceId: workspaceId, source: resolvedSource)
         }
 

@@ -30,7 +30,7 @@ struct HistoryView: View {
                     }
                 }
                 .refreshable {
-                    await store.reload(showSyncIndicator: false)
+                    await store.reload(showSyncIndicator: false, forceFullRecovery: true)
                 }
             }
         }
@@ -50,6 +50,7 @@ struct HistoryView: View {
                 scheduledTimeLabel: confirmation.scheduledDate.shortTimeLabel,
                 phaseTitle: "Plánováno \(confirmation.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
                 amount: confirmation.amount,
+                medicationForm: .tablet,
                 isShared: item.source.isShared
             )
         }
@@ -74,6 +75,7 @@ struct HistoryView: View {
                 scheduledTimeLabel: generatedDose.scheduledTime.label,
                 phaseTitle: generatedDose.phaseTitle,
                 amount: confirmation.amount,
+                medicationForm: generatedDose.medicationForm,
                 isShared: generatedDose.isShared
             )
         }
@@ -86,6 +88,7 @@ struct HistoryView: View {
             scheduledTimeLabel: doseTime?.time.label ?? confirmation.scheduledDate.shortTimeLabel,
             phaseTitle: "Plánováno \(confirmation.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
             amount: confirmation.amount,
+            medicationForm: medication.form,
             isShared: medicationItem.source.isShared
         )
     }
@@ -98,6 +101,7 @@ private struct HistoryDoseDisplay {
     var scheduledTimeLabel: String
     var phaseTitle: String
     var amount: String
+    var medicationForm: MedicationForm
     var isShared: Bool
 }
 
@@ -148,7 +152,11 @@ private struct HistoryRow: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    PillAmountVisualization(amount: DoseAmountFormatter.value(from: dose.amount))
+                    PillAmountVisualization(
+                        amount: DoseAmountFormatter.value(from: dose.amount, for: dose.medicationForm),
+                        medicationForm: dose.medicationForm
+                    )
+                        .frame(width: 118, alignment: .trailing)
                         .accessibilityLabel("Dávka \(dose.amount)")
                 }
                 .accessibilityElement(children: .combine)

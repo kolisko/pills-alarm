@@ -29,12 +29,14 @@ final class CloudSyncCoordinator: ObservableObject {
     private var periodicReloadIntervalMinutes: Int?
     private var isReloading = false
     private var needsReload = false
+    private var needsFullRecovery = false
     private var completions: [() -> Void] = []
 
     func scheduleReload(
         store: MedicationStore,
         delayNanoseconds: UInt64 = 700_000_000,
         showSyncIndicator: Bool = true,
+        forceFullRecovery: Bool = false,
         completion: (() -> Void)? = nil
     ) {
         if let completion {
@@ -42,6 +44,7 @@ final class CloudSyncCoordinator: ObservableObject {
         }
 
         needsReload = true
+        needsFullRecovery = needsFullRecovery || forceFullRecovery
         pendingReloadTask?.cancel()
         pendingReloadTask = Task { [weak self, weak store] in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
@@ -85,7 +88,9 @@ final class CloudSyncCoordinator: ObservableObject {
         isReloading = true
         repeat {
             needsReload = false
-            await store.reload(showSyncIndicator: showSyncIndicator)
+            let forceFullRecovery = needsFullRecovery
+            needsFullRecovery = false
+            await store.reload(showSyncIndicator: showSyncIndicator, forceFullRecovery: forceFullRecovery)
         } while needsReload
         isReloading = false
 
@@ -146,7 +151,7 @@ struct PillsAlarmApp: App {
                 .onChange(of: scenePhase) {
                     if scenePhase == .active {
                         cloudSync.startPeriodicReload(store: store, intervalMinutes: autoRefreshIntervalMinutes)
-                        cloudSync.scheduleReload(store: store, delayNanoseconds: 250_000_000)
+                        cloudSync.scheduleReload(store: store, delayNanoseconds: 250_000_000, forceFullRecovery: true)
                     } else {
                         cloudSync.stopPeriodicReload()
                     }
@@ -157,7 +162,7 @@ struct PillsAlarmApp: App {
                 }
                 .onChange(of: networkStatus.isConnected) { _, isConnected in
                     guard isConnected, scenePhase == .active else { return }
-                    cloudSync.scheduleReload(store: store, delayNanoseconds: 250_000_000, showSyncIndicator: false)
+                    cloudSync.scheduleReload(store: store, delayNanoseconds: 250_000_000, showSyncIndicator: false, forceFullRecovery: true)
                 }
         }
     }

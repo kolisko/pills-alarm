@@ -71,7 +71,7 @@ struct PlanView: View {
                     }
                 }
                 .refreshable {
-                    await store.reload(showSyncIndicator: false)
+                    await store.reload(showSyncIndicator: false, forceFullRecovery: true)
                 }
             }
             .sheet(item: $newMedication) { medication in
@@ -135,6 +135,12 @@ private struct MedicationEditorView: View {
             Section("Lék") {
                 TextField("Název", text: $draft.name)
                 TextField("Poznámka", text: $draft.note, axis: .vertical)
+                Picker("Forma", selection: $draft.form) {
+                    ForEach(MedicationForm.allCases) { form in
+                        Text(form.label).tag(form)
+                    }
+                }
+                .pickerStyle(.segmented)
                 DatePicker("Začátek plánu", selection: $draft.startDate, displayedComponents: .date)
             }
 
@@ -188,7 +194,7 @@ private struct MedicationEditorView: View {
 
             Section("Fáze dávkování") {
                 ForEach($draft.phases) { $phase in
-                    PhaseEditorView(phase: $phase, doseTimes: draft.doseTimes)
+                    PhaseEditorView(phase: $phase, doseTimes: draft.doseTimes, medicationForm: draft.form)
                 }
                 .onDelete { offsets in
                     guard !isReadOnly else { return }
@@ -303,6 +309,7 @@ private struct MedicationEditorView: View {
 private struct PhaseEditorView: View {
     @Binding var phase: PlanPhase
     var doseTimes: [DoseTime]
+    var medicationForm: MedicationForm
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -326,7 +333,7 @@ private struct PhaseEditorView: View {
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
 
-                    PillAmountControl(amount: doseAmountBinding(for: doseTime.id))
+                    PillAmountControl(amount: doseAmountBinding(for: doseTime.id), medicationForm: medicationForm)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .padding(.vertical, 6)
@@ -355,11 +362,13 @@ private struct PhaseEditorView: View {
         Binding<Double> {
             phase.doses.first(where: { $0.timeId == timeId })?.amount ?? 0
         } set: { value in
-            let amount = DoseAmountFormatter.normalized(value)
+            let amount = DoseAmountFormatter.normalized(value, for: medicationForm)
             if let index = phase.doses.firstIndex(where: { $0.timeId == timeId }) {
                 phase.doses[index].amount = amount
             } else {
-                phase.doses.append(DoseEntry(timeId: timeId, amount: amount))
+                var entry = DoseEntry(timeId: timeId, amount: 0)
+                entry.amount = amount
+                phase.doses.append(entry)
             }
         }
     }
@@ -367,9 +376,19 @@ private struct PhaseEditorView: View {
 
 private struct PillAmountControl: View {
     @Binding var amount: Double
+    var medicationForm: MedicationForm
     private let controlColor = Color.teal
 
     var body: some View {
+        switch medicationForm {
+        case .tablet:
+            tabletControl
+        case .syrup:
+            syrupControl
+        }
+    }
+
+    private var tabletControl: some View {
         HStack(alignment: .center, spacing: 0) {
             HStack(spacing: 8) {
                 amountButton(delta: -0.25, fraction: 0.25, systemImage: "minus", label: "Ubrat čtvrt pilulky")
@@ -381,7 +400,7 @@ private struct PillAmountControl: View {
 
             Spacer(minLength: 18)
 
-            PillAmountVisualization(amount: amount)
+            PillAmountVisualization(amount: amount, medicationForm: .tablet)
                 .frame(minWidth: 74, alignment: .center)
                 .accessibilityLabel("Dávka \(accessibilityAmount)")
 
@@ -396,8 +415,35 @@ private struct PillAmountControl: View {
         .frame(maxWidth: .infinity)
     }
 
+    private var syrupControl: some View {
+        HStack(alignment: .center, spacing: 0) {
+            HStack(spacing: 8) {
+                syrupAmountButton(delta: -5, label: "Ubrat pět mililitrů")
+                    .disabled(amount <= 0)
+
+                syrupAmountButton(delta: -1, label: "Ubrat jeden mililitr")
+                    .disabled(amount <= 0)
+            }
+
+            Spacer(minLength: 18)
+
+            PillAmountVisualization(amount: amount, medicationForm: .syrup)
+                .frame(minWidth: 74, alignment: .center)
+                .accessibilityLabel("Dávka \(accessibilityAmount)")
+
+            Spacer(minLength: 18)
+
+            HStack(spacing: 8) {
+                syrupAmountButton(delta: 1, label: "Přidat jeden mililitr")
+
+                syrupAmountButton(delta: 5, label: "Přidat pět mililitrů")
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var accessibilityAmount: String {
-        DoseAmountFormatter.displayText(for: amount)
+        DoseAmountFormatter.displayText(for: amount, form: medicationForm)
     }
 
     private func amountButton(delta: Double, fraction: Double, systemImage: String, label: String) -> some View {
@@ -405,6 +451,16 @@ private struct PillAmountControl: View {
             amount = DoseAmountFormatter.normalized(amount + delta)
         } label: {
             PillAmountStepIcon(fraction: fraction, systemImage: systemImage, color: controlColor)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func syrupAmountButton(delta: Double, label: String) -> some View {
+        Button {
+            amount = DoseAmountFormatter.normalized(amount + delta, for: .syrup)
+        } label: {
+            SyrupAmountStepIcon(systemImage: delta > 0 ? "plus" : "minus", color: controlColor)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -434,8 +490,31 @@ private struct PillAmountStepIcon: View {
     }
 }
 
+private struct SyrupAmountStepIcon: View {
+    @Environment(\.isEnabled) private var isEnabled
+    var systemImage: String
+    var color: Color
+
+    var body: some View {
+        ZStack(alignment: systemImage == "plus" ? .bottomTrailing : .bottomLeading) {
+            SyrupDropIcon(amountText: "", color: color, activeFillProgress: 0)
+                .frame(width: 24, height: 28)
+
+            Image(systemName: "\(systemImage).circle.fill")
+                .font(.caption2.weight(.bold))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, color)
+                .offset(x: systemImage == "plus" ? 5 : -5, y: 5)
+        }
+        .frame(width: 32, height: 32)
+        .opacity(isEnabled ? 1 : 0.35)
+        .contentShape(Rectangle())
+    }
+}
+
 struct PillAmountVisualization: View {
     var amount: Double
+    var medicationForm: MedicationForm = .tablet
     var isActiveDose = false
     var doseColor: Color = .secondary
     @State private var deactivationStartDate: Date?
@@ -461,7 +540,7 @@ struct PillAmountVisualization: View {
         TimelineView(.animation) { context in
             let pulse = activePulseValue(at: context.date)
 
-            pillStack(activeFillProgress: pulse)
+            doseStack(activeFillProgress: pulse)
                 .scaleEffect(1 + 0.08 * pulse)
                 .opacity(1 - 0.28 * pulse)
                 .shadow(color: Color.teal.opacity(0.22 * pulse), radius: 4, y: 1)
@@ -497,15 +576,30 @@ struct PillAmountVisualization: View {
     }
 
     @ViewBuilder
+    private func doseStack(activeFillProgress: Double) -> some View {
+        switch medicationForm {
+        case .tablet:
+            pillStack(activeFillProgress: activeFillProgress)
+        case .syrup:
+            SyrupDropIcon(
+                amountText: DoseAmountFormatter.displayText(for: amount, form: .syrup),
+                color: doseColor,
+                activeFillProgress: activeFillProgress
+            )
+            .frame(width: 44, height: 36)
+        }
+    }
+
+    @ViewBuilder
     private func pillStack(activeFillProgress: Double) -> some View {
         HStack(spacing: 5) {
             if quarters == 0 {
                 EmptyDoseIcon()
-                    .frame(width: 32, height: 28)
+                    .frame(width: 36, height: 32)
             } else {
                 if wholeCount >= 3 {
                     StackedPillIcon(count: wholeCount, color: doseColor, activeFillProgress: activeFillProgress)
-                        .frame(width: 38, height: 34)
+                        .frame(width: 44, height: 38)
                 } else {
                     ForEach(0..<wholeCount, id: \.self) { _ in
                         PillPortionIcon(
@@ -514,7 +608,7 @@ struct PillAmountVisualization: View {
                             showsOutline: false,
                             activeFillProgress: activeFillProgress
                         )
-                            .frame(width: 30, height: 30)
+                            .frame(width: 36, height: 36)
                     }
                 }
 
@@ -525,11 +619,81 @@ struct PillAmountVisualization: View {
                         showsOutline: true,
                         activeFillProgress: activeFillProgress
                     )
-                        .frame(width: 30, height: 30)
+                        .frame(width: 36, height: 36)
                 }
             }
         }
-        .frame(height: 32)
+        .frame(height: 38)
+    }
+}
+
+private struct SyrupDropIcon: View {
+    var amountText: String
+    var color: Color
+    var activeFillProgress: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let diameter = min(proxy.size.width, proxy.size.height)
+            let strokeWidth = max(diameter * 0.1, 2)
+            let fillScale = 0.45 + 0.55 * activeFillProgress
+            let fillOpacity = 0.26 * activeFillProgress
+
+            ZStack {
+                DropShape()
+                    .fill(color.opacity(fillOpacity))
+                    .scaleEffect(fillScale)
+
+                DropShape()
+                    .stroke(
+                        color.opacity(0.95),
+                        style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
+                    )
+
+                if !amountText.isEmpty {
+                    Text(amountText)
+                        .font(.caption2.weight(.bold).monospacedDigit())
+                        .foregroundStyle(color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.45)
+                        .padding(.horizontal, 3)
+                        .offset(y: diameter * 0.12)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+}
+
+private struct DropShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let width = rect.width
+        let height = rect.height
+        var path = Path()
+
+        path.move(to: CGPoint(x: width * 0.5, y: height * 0.04))
+        path.addCurve(
+            to: CGPoint(x: width * 0.86, y: height * 0.58),
+            control1: CGPoint(x: width * 0.66, y: height * 0.21),
+            control2: CGPoint(x: width * 0.86, y: height * 0.38)
+        )
+        path.addCurve(
+            to: CGPoint(x: width * 0.5, y: height * 0.96),
+            control1: CGPoint(x: width * 0.86, y: height * 0.81),
+            control2: CGPoint(x: width * 0.7, y: height * 0.96)
+        )
+        path.addCurve(
+            to: CGPoint(x: width * 0.14, y: height * 0.58),
+            control1: CGPoint(x: width * 0.3, y: height * 0.96),
+            control2: CGPoint(x: width * 0.14, y: height * 0.81)
+        )
+        path.addCurve(
+            to: CGPoint(x: width * 0.5, y: height * 0.04),
+            control1: CGPoint(x: width * 0.14, y: height * 0.38),
+            control2: CGPoint(x: width * 0.34, y: height * 0.21)
+        )
+        path.closeSubpath()
+        return path
     }
 }
 
