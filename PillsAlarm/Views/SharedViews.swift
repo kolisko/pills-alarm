@@ -243,6 +243,11 @@ extension Date {
         }
     }
 
+    func relativeDayAndDateLabel(referenceDate: Date = Date(), calendar: Calendar = .current) -> String {
+        let date = formatted(.dateTime.locale(Locale(identifier: "cs_CZ")).day().month().year())
+        return "\(relativeDayTitle(referenceDate: referenceDate, calendar: calendar)), \(date)"
+    }
+
     func relativeWeekdaySubtitle(referenceDate: Date = Date(), calendar: Calendar = .current) -> String? {
         let referenceStart = calendar.startOfDay(for: referenceDate)
         let targetStart = calendar.startOfDay(for: self)

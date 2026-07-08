@@ -15,6 +15,46 @@ struct CloudSharePreparation {
     var share: CKShare
 }
 
+struct PublicMedicationPlanSnapshot: Codable, Equatable {
+    var medicationId: UUID
+    var name: String
+    var note: String
+    var form: MedicationForm
+    var colorHex: String
+    var startDate: Date
+    var doseTimes: [DoseTime]
+    var phases: [PlanPhase]
+
+    init(medication: Medication) {
+        medicationId = medication.id
+        name = medication.name
+        note = medication.note
+        form = medication.form
+        colorHex = medication.colorHex
+        startDate = medication.startDate
+        doseTimes = medication.doseTimes
+        phases = medication.phases
+    }
+}
+
+struct PublicMedicalTimelineExportSnapshot: Codable, Equatable {
+    var schemaVersion: Int
+    var source: String
+    var publicIdentifier: String
+    var exportedAt: Date
+    var medications: [PublicMedicationPlanSnapshot]
+
+    init(publicIdentifier: String, medications: [Medication], exportedAt: Date = Date()) {
+        schemaVersion = 1
+        source = "Pill Care"
+        self.publicIdentifier = publicIdentifier
+        self.exportedAt = exportedAt
+        self.medications = medications
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map(PublicMedicationPlanSnapshot.init)
+    }
+}
+
 struct CloudSnapshot {
     var group: CKRecord
     var database: CKDatabase

@@ -26,6 +26,7 @@ final class MedicationStore: ObservableObject {
     @Published private(set) var syncErrorMessage: String?
     @Published private(set) var workspaceCandidates: [WorkspaceCandidate] = []
     @Published private(set) var currentUserRecordName: String?
+    @Published private(set) var medicalTimelinePublicIdentifier: String?
 
     private let cloud: CloudKitRepository
     private let defaults: UserDefaults
@@ -461,12 +462,14 @@ final class MedicationStore: ObservableObject {
             throw error
         }
         let medicationToSave = UpsertMedicationUseCase.medicationForSaving(medication, currentUserRecordName: currentUserRecordName)
+        let exportItems = medicationItemsByReplacing(medicationToSave, in: context)
 
         beginSync()
         defer { endSync() }
 
         do {
             try await cloud.saveMedication(medicationToSave, groupRecord: context.groupRecord, database: context.database)
+            try await syncMedicalTimelineExport(items: exportItems)
             upsertMedicationLocally(medicationToSave, source: source(for: context, medication: medicationToSave))
             loadState = .ready
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
@@ -488,6 +491,7 @@ final class MedicationStore: ObservableObject {
             do {
                 try await deleteConfirmations(for: item.medication.id, in: context)
                 try await cloud.deleteMedication(item.medication, groupRecord: context.groupRecord, database: context.database)
+                try await syncMedicalTimelineExport(items: medicationItems.filter { $0.medication.id != item.medication.id })
                 await reload()
             } catch {
                 recordSyncError(error)
@@ -551,6 +555,7 @@ final class MedicationStore: ObservableObject {
             if !isSameCloudRecordLocation(sourceContext, destinationContext) {
                 try await cloud.deleteMedication(item.medication, groupRecord: sourceContext.groupRecord, database: sourceContext.database)
             }
+            try await syncMedicalTimelineExport(items: medicationItemsByReplacing(change.medication, in: destinationContext))
 
             applySharingChangeLocally(
                 change.medication,
@@ -565,6 +570,23 @@ final class MedicationStore: ObservableObject {
             recordSyncError(error)
             throw error
         }
+    }
+
+    private func syncMedicalTimelineExport(items: [MedicationListItem]) async throws {
+        let publishedMedications = items
+            .filter { $0.medication.isPublishedToMedicalTimeline && isOwnedMedicalTimelineSource($0.source.id) }
+            .map(\.medication)
+
+        guard !publishedMedications.isEmpty || medicalTimelinePublicIdentifier != nil else { return }
+        guard let context = personalContext else { throw StoreError.missingCloudWorkspace }
+
+        let identifierResult = try await cloud.ensureMedicalTimelineExportIdentifier(
+            groupRecord: context.groupRecord,
+            database: context.database
+        )
+        updatePersonalContextGroupRecord(identifierResult.groupRecord)
+        medicalTimelinePublicIdentifier = identifierResult.identifier
+        try await cloud.saveMedicalTimelineExport(identifier: identifierResult.identifier, medications: publishedMedications)
     }
 
     func addMember(named name: String) {
@@ -767,6 +789,7 @@ final class MedicationStore: ObservableObject {
         workspaceContexts = [:]
         personalWorkspaceId = nil
         ownedGroupWorkspaceId = nil
+        medicalTimelinePublicIdentifier = nil
         hasLoadedCloudState = false
         careGroupName = ""
         members = []
@@ -993,6 +1016,9 @@ final class MedicationStore: ObservableObject {
                 context.groupRecord = record
                 context.name = record[Field.name] as? String ?? ""
                 context.source = WorkspaceSource(id: context.id, name: context.name, isShared: context.isShared)
+                if cloud.isCanonicalPersonalReference(context.reference) {
+                    medicalTimelinePublicIdentifier = cloud.medicalTimelineExportIdentifier(from: record)
+                }
             case RecordType.member where cloud.isRecord(record, linkedTo: context.groupRecord):
                 guard let member = cloud.member(from: record) else { continue }
                 if let index = context.members.firstIndex(where: { $0.id == member.id }) {
@@ -1171,6 +1197,7 @@ final class MedicationStore: ObservableObject {
 
         personalWorkspaceId = personal.id
         ownedGroupWorkspaceId = ownedGroup?.id
+        medicalTimelinePublicIdentifier = cloud.medicalTimelineExportIdentifier(from: personal.groupRecord)
         groupRecord = ownedGroup?.groupRecord
         groupDatabaseScope = ownedGroup?.databaseScope
         saveStoredGroupReference(from: CloudSnapshot(
@@ -1258,6 +1285,24 @@ final class MedicationStore: ObservableObject {
         }
 
         return personalContext
+    }
+
+    private func medicationItemsByReplacing(_ medication: Medication, in context: WorkspaceContext) -> [MedicationListItem] {
+        var items = medicationItems.filter { $0.medication.id != medication.id }
+        items.append(MedicationListItem(medication: medication, source: source(for: context, medication: medication)))
+        return items
+    }
+
+    private func isOwnedMedicalTimelineSource(_ sourceId: String) -> Bool {
+        sourceId == personalWorkspaceId || sourceId == ownedGroupWorkspaceId
+    }
+
+    private func updatePersonalContextGroupRecord(_ groupRecord: CKRecord) {
+        guard let personalWorkspaceId,
+              var context = workspaceContexts[personalWorkspaceId] else { return }
+
+        context.groupRecord = groupRecord
+        workspaceContexts[personalWorkspaceId] = context
     }
 
     private func confirmationsForMedication(_ medicationId: UUID, in context: WorkspaceContext) -> [DoseConfirmation] {

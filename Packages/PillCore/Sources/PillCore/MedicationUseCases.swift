@@ -89,3 +89,53 @@ public enum UpsertMedicationUseCase {
         return updated
     }
 }
+
+public enum MedicationPhaseEditingUseCase {
+    public static func addingPhaseStartingToday(
+        to medication: Medication,
+        title: String,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Medication {
+        var updated = medication
+        if let openPhaseIndex = updated.phases.indices.last(where: { updated.phases[$0].durationDays == nil }),
+           let duration = durationFromPhaseStartToToday(
+            phaseIndex: openPhaseIndex,
+            medication: updated,
+            now: now,
+            calendar: calendar
+           ) {
+            updated.phases[openPhaseIndex].durationDays = max(0, duration)
+        }
+
+        updated.phases.append(
+            PlanPhase(
+                title: title,
+                durationDays: nil,
+                doses: updated.doseTimes.map { DoseEntry(timeId: $0.id, amount: 0) }
+            )
+        )
+        return updated
+    }
+
+    private static func durationFromPhaseStartToToday(
+        phaseIndex: Array<PlanPhase>.Index,
+        medication: Medication,
+        now: Date,
+        calendar: Calendar
+    ) -> Int? {
+        let planStart = calendar.startOfDay(for: medication.startDate)
+        let today = calendar.startOfDay(for: now)
+        guard let todayOffset = calendar.dateComponents([.day], from: planStart, to: today).day,
+              todayOffset >= 0
+        else {
+            return nil
+        }
+
+        let phaseStartOffset = medication.phases[..<phaseIndex].reduce(0) { total, phase in
+            total + (phase.durationDays ?? 0)
+        }
+
+        return todayOffset - phaseStartOffset
+    }
+}

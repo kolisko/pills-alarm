@@ -154,6 +154,18 @@ private struct MedicationEditorView: View {
                     Label("Nejdřív vytvoř skupinu. Do té doby je plán soukromý.", systemImage: "lock.fill")
                         .foregroundStyle(.secondary)
                 }
+
+                Toggle("Medical Timeline", isOn: medicalTimelineBinding)
+                if let identifier = store.medicalTimelinePublicIdentifier {
+                    LabeledContent("Medical Timeline ID") {
+                        Text(identifier)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                    }
+                }
+                Text(medicalTimelineFooterText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Časy") {
@@ -193,8 +205,13 @@ private struct MedicationEditorView: View {
             }
 
             Section("Fáze dávkování") {
-                ForEach($draft.phases) { $phase in
-                    PhaseEditorView(phase: $phase, doseTimes: draft.doseTimes, medicationForm: draft.form)
+                ForEach(draft.phases.indices, id: \.self) { phaseIndex in
+                    PhaseEditorView(
+                        phase: $draft.phases[phaseIndex],
+                        dateRange: phaseDateRange(for: phaseIndex),
+                        doseTimes: draft.doseTimes,
+                        medicationForm: draft.form
+                    )
                 }
                 .onDelete { offsets in
                     guard !isReadOnly else { return }
@@ -203,12 +220,9 @@ private struct MedicationEditorView: View {
 
                 if !isReadOnly {
                     Button {
-                        draft.phases.append(
-                            PlanPhase(
-                                title: "Nová fáze",
-                                durationDays: nil,
-                                doses: draft.doseTimes.map { DoseEntry(timeId: $0.id, amount: 0) }
-                            )
+                        draft = MedicationPhaseEditingUseCase.addingPhaseStartingToday(
+                            to: draft,
+                            title: "Nová fáze"
                         )
                     } label: {
                         Label("Přidat fázi", systemImage: "plus.circle")
@@ -284,6 +298,26 @@ private struct MedicationEditorView: View {
         return "Plán zůstane soukromý a uvidíš ho jen na svých zařízeních."
     }
 
+    private var medicalTimelineBinding: Binding<Bool> {
+        Binding {
+            draft.isPublishedToMedicalTimeline
+        } set: { isPublished in
+            draft.isPublishedToMedicalTimeline = isPublished
+        }
+    }
+
+    private var medicalTimelineFooterText: String {
+        if draft.isPublishedToMedicalTimeline {
+            if store.medicalTimelinePublicIdentifier == nil {
+                return "Po uložení se vytvoří jedno stabilní Medical Timeline ID. Pod ním bude veřejně dostupný seznam všech publikovaných plánů."
+            }
+
+            return "Pill Care bude pod jedním Medical Timeline ID udržovat veřejnou kopii všech publikovaných plánů. Kdokoli s tímto ID je může zobrazit."
+        }
+
+        return "Plán se nebude publikovat pro Medical Timeline."
+    }
+
     private func timeBinding(for time: Binding<TimeOfDay>) -> Binding<Date> {
         Binding<Date> {
             Calendar.current.date(bySettingHour: time.wrappedValue.hour, minute: time.wrappedValue.minute, second: 0, of: Date()) ?? Date()
@@ -304,10 +338,33 @@ private struct MedicationEditorView: View {
         }
         return result
     }
+
+    private func phaseDateRange(for phaseIndex: Int, calendar: Calendar = .current) -> PhaseDateRange? {
+        guard draft.phases.indices.contains(phaseIndex) else { return nil }
+
+        var startDate = calendar.startOfDay(for: draft.startDate)
+        for previousPhaseIndex in draft.phases.indices where previousPhaseIndex < phaseIndex {
+            guard let durationDays = draft.phases[previousPhaseIndex].durationDays,
+                  let nextStartDate = calendar.date(byAdding: .day, value: durationDays, to: startDate)
+            else {
+                return nil
+            }
+            startDate = nextStartDate
+        }
+
+        let durationDays = draft.phases[phaseIndex].durationDays
+        let endDate = durationDays.flatMap { duration -> Date? in
+            guard duration > 0 else { return nil }
+            return calendar.date(byAdding: .day, value: duration - 1, to: startDate)
+        }
+
+        return PhaseDateRange(startDate: startDate, durationDays: durationDays, endDate: endDate)
+    }
 }
 
 private struct PhaseEditorView: View {
     @Binding var phase: PlanPhase
+    var dateRange: PhaseDateRange?
     var doseTimes: [DoseTime]
     var medicationForm: MedicationForm
 
@@ -318,13 +375,17 @@ private struct PhaseEditorView: View {
             Toggle("Fáze má pevné trvání", isOn: durationEnabled)
 
             if durationEnabled.wrappedValue {
-                Stepper(value: durationDays, in: 1...365) {
+                Stepper(value: durationDays, in: 0...365) {
                     Text("Trvání: \(phase.durationDays ?? 1) dní")
                 }
             } else {
                 Text("Platí až do další změny")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            if let dateRange {
+                PhaseDateRangeView(dateRange: dateRange)
             }
 
             ForEach(doseTimes) { doseTime in
@@ -346,13 +407,13 @@ private struct PhaseEditorView: View {
         Binding<Bool> {
             phase.durationDays != nil
         } set: { enabled in
-            phase.durationDays = enabled ? (phase.durationDays ?? 1) : nil
+            phase.durationDays = enabled ? (phase.durationDays ?? 0) : nil
         }
     }
 
     private var durationDays: Binding<Int> {
         Binding<Int> {
-            phase.durationDays ?? 1
+            phase.durationDays ?? 0
         } set: { value in
             phase.durationDays = value
         }
@@ -370,6 +431,44 @@ private struct PhaseEditorView: View {
                 entry.amount = amount
                 phase.doses.append(entry)
             }
+        }
+    }
+}
+
+private struct PhaseDateRange: Equatable {
+    var startDate: Date
+    var durationDays: Int?
+    var endDate: Date?
+}
+
+private struct PhaseDateRangeView: View {
+    var dateRange: PhaseDateRange
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            rangeRow(title: "Od", value: dateRange.startDate.relativeDayAndDateLabel())
+
+            if let durationDays = dateRange.durationDays {
+                if durationDays == 0 {
+                    rangeRow(title: "Do", value: "Bez aktivního dne")
+                } else if let endDate = dateRange.endDate {
+                    rangeRow(title: "Do", value: endDate.relativeDayAndDateLabel())
+                }
+            } else {
+                rangeRow(title: "Do", value: "Bez konce")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.top, 2)
+    }
+
+    private func rangeRow(title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title)
+                .fontWeight(.semibold)
+                .frame(width: 22, alignment: .leading)
+            Text(value)
         }
     }
 }

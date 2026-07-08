@@ -1,6 +1,7 @@
 import CloudKit
 import Foundation
 import PillCore
+import Security
 
 @MainActor
 final class CloudKitRepository {
@@ -28,6 +29,10 @@ final class CloudKitRepository {
 
     private var sharedDatabase: CKDatabase {
         container.sharedCloudDatabase
+    }
+
+    private var publicDatabase: CKDatabase {
+        container.publicCloudDatabase
     }
 
     func accountStatus() async throws -> CKAccountStatus {
@@ -281,6 +286,43 @@ final class CloudKitRepository {
     func deleteMedication(_ medication: Medication, groupRecord: CKRecord, database: CKDatabase) async throws {
         let recordID = CKRecord.ID(recordName: recordName(prefix: "medication", id: medication.id), zoneID: groupRecord.recordID.zoneID)
         _ = try await modify(recordsToSave: [], recordIDsToDelete: [recordID], in: database)
+    }
+
+    func medicalTimelineExportIdentifier(from groupRecord: CKRecord) -> String? {
+        let identifier = (groupRecord[Field.medicalTimelinePublicIdentifier] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return identifier?.isEmpty == false ? identifier : nil
+    }
+
+    func ensureMedicalTimelineExportIdentifier(groupRecord: CKRecord, database: CKDatabase) async throws -> (identifier: String, groupRecord: CKRecord) {
+        if let identifier = medicalTimelineExportIdentifier(from: groupRecord) {
+            return (identifier, groupRecord)
+        }
+
+        let identifier = Self.makeMedicalTimelineExportIdentifier()
+        let group = groupRecord
+        group[Field.medicalTimelinePublicIdentifier] = identifier as CKRecordValue
+        let saved = try await modify(recordsToSave: [group], recordIDsToDelete: [], in: database)
+        return (identifier, saved.first(where: { $0.recordType == RecordType.group }) ?? group)
+    }
+
+    func saveMedicalTimelineExport(identifier: String, medications: [Medication]) async throws {
+        let recordID = CKRecord.ID(recordName: medicalTimelineExportRecordName(identifier: identifier))
+        let record: CKRecord
+        do {
+            record = try await fetchRecord(recordID: recordID, database: publicDatabase)
+        } catch {
+            if Self.isRecordMissing(error) {
+                record = CKRecord(recordType: RecordType.medicalTimelineExport, recordID: recordID)
+            } else {
+                throw error
+            }
+        }
+
+        record[Field.publicIdentifier] = identifier as CKRecordValue
+        record[Field.updatedAt] = Date() as CKRecordValue
+        record[Field.payload] = try JSONEncoder.cloud.encode(PublicMedicalTimelineExportSnapshot(publicIdentifier: identifier, medications: medications)) as NSData
+        _ = try await modify(recordsToSave: [record], recordIDsToDelete: [], in: publicDatabase)
     }
 
     func saveConfirmation(_ confirmation: DoseConfirmation, groupRecord: CKRecord, database: CKDatabase) async throws {
@@ -895,6 +937,24 @@ final class CloudKitRepository {
     private func confirmationRecordName(eventId: String) -> String {
         "confirmation-\(eventId)"
     }
+
+    private func medicalTimelineExportRecordName(identifier: String) -> String {
+        "medical-timeline-export-\(identifier)"
+    }
+
+    private static func makeMedicalTimelineExportIdentifier() -> String {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status != errSecSuccess {
+            return [UUID().uuidString, UUID().uuidString].joined(separator: "-").lowercased()
+        }
+
+        return Data(bytes)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
 }
 
 enum RecordType {
@@ -902,6 +962,7 @@ enum RecordType {
     static let member = "CareMember"
     static let medication = "Medication"
     static let confirmation = "DoseConfirmation"
+    static let medicalTimelineExport = "MedicalTimelineExport"
 }
 
 enum Field {
@@ -914,6 +975,9 @@ enum Field {
     static let payload = "payload"
     static let eventId = "eventId"
     static let medicationId = "medicationId"
+    static let medicalTimelinePublicIdentifier = "medicalTimelinePublicIdentifier"
+    static let publicIdentifier = "publicIdentifier"
+    static let updatedAt = "updatedAt"
 }
 
 private extension JSONEncoder {

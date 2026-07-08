@@ -205,6 +205,26 @@ final class BusinessRulesTests: XCTestCase {
         let medication = try JSONDecoder().decode(Medication.self, from: data)
 
         XCTAssertEqual(medication.form, .tablet)
+        XCTAssertFalse(medication.isPublishedToMedicalTimeline)
+    }
+
+    func testMedicationDecodingTreatsLegacyMedicalTimelineTokenAsPublished() throws {
+        let data = """
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "name": "Vitamin",
+          "note": "",
+          "colorHex": "#2F80ED",
+          "startDate": 1725753600,
+          "doseTimes": [],
+          "phases": [],
+          "medicalTimelinePublicToken": "legacy-token"
+        }
+        """.data(using: .utf8)!
+
+        let medication = try JSONDecoder().decode(Medication.self, from: data)
+
+        XCTAssertTrue(medication.isPublishedToMedicalTimeline)
     }
 
     func testScheduleEngineGeneratesSyrupDoseWithMilliliterAmount() {
@@ -307,6 +327,48 @@ final class BusinessRulesTests: XCTestCase {
         )
 
         XCTAssertTrue(alarms.isEmpty)
+    }
+
+    func testAddingPhaseStartingTodayClosesOpenPhaseAtToday() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let medication = makeMedication(ownerUserRecordName: nil)
+        let today = calendar.date(byAdding: .day, value: 2, to: medication.startDate)!
+
+        var updated = MedicationPhaseEditingUseCase.addingPhaseStartingToday(
+            to: medication,
+            title: "Nová fáze",
+            now: today,
+            calendar: calendar
+        )
+        updated.phases[1].doses[0].amount = 2
+
+        let todaysDoses = ScheduleEngine.doses(on: today, medication: updated, calendar: calendar)
+        let previousDay = calendar.date(byAdding: .day, value: -1, to: today)!
+        let previousDoses = ScheduleEngine.doses(on: previousDay, medication: updated, calendar: calendar)
+
+        XCTAssertEqual(updated.phases.map(\.durationDays), [2, nil])
+        XCTAssertEqual(previousDoses.first?.phaseTitle, "Základní dávkování")
+        XCTAssertEqual(todaysDoses.first?.phaseTitle, "Nová fáze")
+    }
+
+    func testAddingPhaseStartingTodayCanReplacePhaseStartedToday() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let medication = makeMedication(ownerUserRecordName: nil)
+
+        var updated = MedicationPhaseEditingUseCase.addingPhaseStartingToday(
+            to: medication,
+            title: "Nová fáze",
+            now: medication.startDate,
+            calendar: calendar
+        )
+        updated.phases[1].doses[0].amount = 2
+
+        let todaysDoses = ScheduleEngine.doses(on: medication.startDate, medication: updated, calendar: calendar)
+
+        XCTAssertEqual(updated.phases.map(\.durationDays), [0, nil])
+        XCTAssertEqual(todaysDoses.first?.phaseTitle, "Nová fáze")
     }
 
     private func makeDose(

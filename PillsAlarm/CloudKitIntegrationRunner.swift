@@ -33,6 +33,7 @@ enum CloudKitIntegrationRunner {
     private static let planStoryArgument = "--run-cloudkit-plan-story"
     private static let planUpgradeCreateArgument = "--run-cloudkit-plan-upgrade-create"
     private static let planUpgradeVerifyArgument = "--run-cloudkit-plan-upgrade-verify"
+    private static let medicalTimelineSchemaArgument = "--seed-medical-timeline-schema"
     private static let dumpStateArgument = "--dump-cloudkit-state"
 
     static var isRequested: Bool {
@@ -50,6 +51,8 @@ enum CloudKitIntegrationRunner {
             report = await runPlanUpgradeCreate { print($0) }
         case .planUpgradeVerify:
             report = await runPlanUpgradeVerify { print($0) }
+        case .medicalTimelineSchema:
+            report = await seedMedicalTimelineSchema { print($0) }
         case .dumpState:
             report = await dumpState { print($0) }
         case nil:
@@ -68,6 +71,9 @@ enum CloudKitIntegrationRunner {
         if CommandLine.arguments.contains(planUpgradeVerifyArgument) {
             return .planUpgradeVerify
         }
+        if CommandLine.arguments.contains(medicalTimelineSchemaArgument) {
+            return .medicalTimelineSchema
+        }
         if CommandLine.arguments.contains(dumpStateArgument) {
             return .dumpState
         }
@@ -82,6 +88,7 @@ enum CloudKitIntegrationRunner {
         case planStory
         case planUpgradeCreate
         case planUpgradeVerify
+        case medicalTimelineSchema
         case dumpState
     }
 
@@ -115,12 +122,13 @@ enum CloudKitIntegrationRunner {
                 )
                 let scope = snapshot.databaseScope == .shared ? "shared" : "private"
                 let workspaceName = snapshot.name.isEmpty ? "(personal)" : snapshot.name
+                let medicalTimelineId = cloud.medicalTimelineExportIdentifier(from: snapshot.group) ?? "nil"
                 let medicationSummary = snapshot.medications
                     .map { "\($0.name)[\($0.id.uuidString)] sharedGroupId=\($0.sharedGroupId ?? "nil") owner=\($0.ownerUserRecordName ?? "nil")" }
                     .joined(separator: " | ")
                 note(
                     "workspace-\(reference.recordName)",
-                    "scope=\(scope) id=\(reference.id) name=\(workspaceName) members=\(snapshot.members.count) medications=\(snapshot.medications.count) confirmations=\(snapshot.confirmations.count) meds=\(medicationSummary)"
+                    "scope=\(scope) id=\(reference.id) name=\(workspaceName) medicalTimelineId=\(medicalTimelineId) members=\(snapshot.members.count) medications=\(snapshot.medications.count) confirmations=\(snapshot.confirmations.count) meds=\(medicationSummary)"
                 )
             }
 
@@ -554,6 +562,54 @@ enum CloudKitIntegrationRunner {
 
             try await cleanCanonicalWorkspace(cloud: cloud)
             pass("cleanup", "Deleted upgrade test workspace from CloudKit.")
+            return IntegrationReport(runId: runId, startedAt: startedAt, finishedAt: Date(), success: true, checks: checks)
+        } catch {
+            return fail("unexpected-error", String(describing: error))
+        }
+    }
+
+    static func seedMedicalTimelineSchema(progress: @escaping (String) -> Void) async -> IntegrationReport {
+        var checks: [IntegrationCheck] = []
+        let startedAt = Date()
+        let runId = "medical-timeline-schema-\(Int(startedAt.timeIntervalSince1970))"
+        let cloud = CloudKitRepository()
+
+        func pass(_ name: String, _ detail: String) {
+            checks.append(IntegrationCheck(name: name, status: "pass", detail: detail))
+            progress("PASS \(name): \(detail)")
+        }
+
+        func fail(_ name: String, _ detail: String) -> IntegrationReport {
+            checks.append(IntegrationCheck(name: name, status: "fail", detail: detail))
+            progress("FAIL \(name): \(detail)")
+            return IntegrationReport(runId: runId, startedAt: startedAt, finishedAt: Date(), success: false, checks: checks)
+        }
+
+        do {
+            progress("START Medical Timeline schema seed \(runId)")
+
+            let accountStatus = try await waitForAvailableAccount(cloud: cloud)
+            guard accountStatus == .available else {
+                return fail("icloud-account", "Expected available iCloud account, got \(accountStatus.rawValue).")
+            }
+            pass("icloud-account", "iCloud account is available.")
+
+            try await cloud.ensurePrivateZone()
+            let workspace = try await cloud.ensurePersonalWorkspace()
+            let identifierResult = try await cloud.ensureMedicalTimelineExportIdentifier(
+                groupRecord: workspace.group,
+                database: workspace.database
+            )
+            pass("medical-timeline-id", identifierResult.identifier)
+
+            var medication = makeMedication(runId: "MedicalTimeline-\(Int(startedAt.timeIntervalSince1970))")
+            medication.isPublishedToMedicalTimeline = true
+            try await cloud.saveMedication(medication, groupRecord: identifierResult.groupRecord, database: workspace.database)
+            pass("private-medication", "Saved schema seed medication \(medication.id.uuidString).")
+
+            try await cloud.saveMedicalTimelineExport(identifier: identifierResult.identifier, medications: [medication])
+            pass("public-export", "Saved MedicalTimelineExport medical-timeline-export-\(identifierResult.identifier).")
+
             return IntegrationReport(runId: runId, startedAt: startedAt, finishedAt: Date(), success: true, checks: checks)
         } catch {
             return fail("unexpected-error", String(describing: error))

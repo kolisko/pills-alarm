@@ -125,6 +125,7 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
     public var phases: [PlanPhase]
     public var ownerUserRecordName: String?
     public var sharedGroupId: String?
+    public var isPublishedToMedicalTimeline: Bool
 
     public var isSharedWithGroup: Bool {
         sharedGroupId != nil
@@ -140,7 +141,8 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
         doseTimes: [DoseTime],
         phases: [PlanPhase],
         ownerUserRecordName: String? = nil,
-        sharedGroupId: String? = nil
+        sharedGroupId: String? = nil,
+        isPublishedToMedicalTimeline: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -152,6 +154,7 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
         self.phases = phases
         self.ownerUserRecordName = ownerUserRecordName
         self.sharedGroupId = sharedGroupId
+        self.isPublishedToMedicalTimeline = isPublishedToMedicalTimeline
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
@@ -165,6 +168,8 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
         case phases
         case ownerUserRecordName
         case sharedGroupId
+        case isPublishedToMedicalTimeline
+        case medicalTimelinePublicToken
     }
 
     public init(from decoder: Decoder) throws {
@@ -179,6 +184,23 @@ public struct Medication: Identifiable, Codable, Hashable, Sendable {
         phases = try container.decode([PlanPhase].self, forKey: .phases)
         ownerUserRecordName = try container.decodeIfPresent(String.self, forKey: .ownerUserRecordName)
         sharedGroupId = try container.decodeIfPresent(String.self, forKey: .sharedGroupId)
+        let legacyPublicToken = try container.decodeIfPresent(String.self, forKey: .medicalTimelinePublicToken)
+        isPublishedToMedicalTimeline = try container.decodeIfPresent(Bool.self, forKey: .isPublishedToMedicalTimeline) ?? (legacyPublicToken != nil)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(note, forKey: .note)
+        try container.encode(form, forKey: .form)
+        try container.encode(colorHex, forKey: .colorHex)
+        try container.encode(startDate, forKey: .startDate)
+        try container.encode(doseTimes, forKey: .doseTimes)
+        try container.encode(phases, forKey: .phases)
+        try container.encodeIfPresent(ownerUserRecordName, forKey: .ownerUserRecordName)
+        try container.encodeIfPresent(sharedGroupId, forKey: .sharedGroupId)
+        try container.encode(isPublishedToMedicalTimeline, forKey: .isPublishedToMedicalTimeline)
     }
 }
 
