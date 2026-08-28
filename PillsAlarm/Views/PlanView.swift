@@ -221,8 +221,7 @@ private struct MedicationEditorView: View {
                 if !isReadOnly {
                     Button {
                         draft = MedicationPhaseEditingUseCase.addingPhaseStartingToday(
-                            to: draft,
-                            title: "Nová fáze"
+                            to: draft
                         )
                     } label: {
                         Label("Přidat fázi", systemImage: "plus.circle")

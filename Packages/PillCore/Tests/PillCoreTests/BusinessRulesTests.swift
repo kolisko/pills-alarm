@@ -182,7 +182,7 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(medication.colorHex, "#2F80ED")
         XCTAssertEqual(medication.startDate, calendar.startOfDay(for: now))
         XCTAssertEqual(medication.doseTimes.map(\.label), ["Ráno", "Poledne", "Večer"])
-        XCTAssertEqual(medication.phases.first?.title, "Základní dávkování")
+        XCTAssertEqual(medication.phases.first?.title, "Fáze 1")
         XCTAssertEqual(medication.phases.first?.doses.map(\.amount), [0, 0, 0])
         XCTAssertEqual(medication.form, .tablet)
         XCTAssertNil(medication.ownerUserRecordName)
@@ -350,6 +350,17 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(updated.phases.map(\.durationDays), [2, nil])
         XCTAssertEqual(previousDoses.first?.phaseTitle, "Základní dávkování")
         XCTAssertEqual(todaysDoses.first?.phaseTitle, "Nová fáze")
+    }
+
+    func testNewMedicationPhasesUseSequentialDefaultTitles() {
+        let medication = MedicationFactory.newMedication()
+
+        let updated = MedicationPhaseEditingUseCase.addingPhaseStartingToday(
+            to: medication,
+            now: medication.startDate
+        )
+
+        XCTAssertEqual(updated.phases.map(\.title), ["Fáze 1", "Fáze 2"])
     }
 
     func testAddingPhaseStartingTodayCanReplacePhaseStartedToday() {

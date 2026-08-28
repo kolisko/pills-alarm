@@ -182,7 +182,7 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(medication.colorHex, "#2F80ED")
         XCTAssertEqual(medication.startDate, calendar.startOfDay(for: now))
         XCTAssertEqual(medication.doseTimes.map(\.label), ["Ráno", "Poledne", "Večer"])
-        XCTAssertEqual(medication.phases.first?.title, "Základní dávkování")
+        XCTAssertEqual(medication.phases.first?.title, "Fáze 1")
         XCTAssertEqual(medication.phases.first?.doses.map(\.amount), [0, 0, 0])
         XCTAssertEqual(medication.form, .tablet)
         XCTAssertNil(medication.ownerUserRecordName)

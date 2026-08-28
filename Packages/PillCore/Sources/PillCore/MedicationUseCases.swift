@@ -93,7 +93,7 @@ public enum UpsertMedicationUseCase {
 public enum MedicationPhaseEditingUseCase {
     public static func addingPhaseStartingToday(
         to medication: Medication,
-        title: String,
+        title: String? = nil,
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> Medication {
@@ -110,7 +110,7 @@ public enum MedicationPhaseEditingUseCase {
 
         updated.phases.append(
             PlanPhase(
-                title: title,
+                title: title ?? "Fáze \(updated.phases.count + 1)",
                 durationDays: nil,
                 doses: updated.doseTimes.map { DoseEntry(timeId: $0.id, amount: 0) }
             )

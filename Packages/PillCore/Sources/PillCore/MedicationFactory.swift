@@ -13,7 +13,7 @@ public enum MedicationFactory {
             doseTimes: [morning, noon, evening],
             phases: [
                 PlanPhase(
-                    title: "Základní dávkování",
+                    title: "Fáze 1",
                     durationDays: nil,
                     doses: [
                         DoseEntry(timeId: morning.id, amount: 0),
