@@ -205,10 +205,13 @@ private struct MedicationEditorView: View {
             }
 
             Section("Fáze dávkování") {
-                ForEach(draft.phases.indices, id: \.self) { phaseIndex in
+                ForEach(draft.phases) { phase in
                     PhaseEditorView(
-                        phase: $draft.phases[phaseIndex],
-                        dateRange: phaseDateRange(for: phaseIndex),
+                        phase: phaseBinding(
+                            for: phase,
+                            in: $draft.phases
+                        ),
+                        dateRange: phaseDateRange(for: phase.id),
                         doseTimes: draft.doseTimes,
                         medicationForm: draft.form
                     )
@@ -338,8 +341,8 @@ private struct MedicationEditorView: View {
         return result
     }
 
-    private func phaseDateRange(for phaseIndex: Int, calendar: Calendar = .current) -> PhaseDateRange? {
-        guard draft.phases.indices.contains(phaseIndex) else { return nil }
+    private func phaseDateRange(for phaseId: UUID, calendar: Calendar = .current) -> PhaseDateRange? {
+        guard let phaseIndex = draft.phases.firstIndex(where: { $0.id == phaseId }) else { return nil }
 
         var startDate = calendar.startOfDay(for: draft.startDate)
         for previousPhaseIndex in draft.phases.indices where previousPhaseIndex < phaseIndex {
@@ -358,6 +361,20 @@ private struct MedicationEditorView: View {
         }
 
         return PhaseDateRange(startDate: startDate, durationDays: durationDays, endDate: endDate)
+    }
+}
+
+private func phaseBinding(
+    for phase: PlanPhase,
+    in phases: Binding<[PlanPhase]>
+) -> Binding<PlanPhase> {
+    Binding {
+        phases.wrappedValue.first(where: { $0.id == phase.id }) ?? phase
+    } set: { updatedPhase in
+        guard let phaseIndex = phases.wrappedValue.firstIndex(where: { $0.id == phase.id }) else {
+            return
+        }
+        phases.wrappedValue[phaseIndex] = updatedPhase
     }
 }
 
