@@ -87,16 +87,58 @@ public struct DoseEntry: Identifiable, Codable, Hashable, Sendable {
 }
 
 public struct PlanPhase: Identifiable, Codable, Hashable, Sendable {
+    public static let repeatEveryDaysRange = 1...30
+
     public var id: UUID
     public var title: String
     public var durationDays: Int?
     public var doses: [DoseEntry]
+    public var repeatEveryDays: Int
 
-    public init(id: UUID = UUID(), title: String, durationDays: Int?, doses: [DoseEntry]) {
+    public init(
+        id: UUID = UUID(),
+        title: String,
+        durationDays: Int?,
+        doses: [DoseEntry],
+        repeatEveryDays: Int = 1
+    ) {
         self.id = id
         self.title = title
         self.durationDays = durationDays
         self.doses = doses
+        self.repeatEveryDays = Self.normalizedRepeatEveryDays(repeatEveryDays)
+    }
+
+    public enum CodingKeys: String, CodingKey, Sendable {
+        case id
+        case title
+        case durationDays
+        case doses
+        case repeatEveryDays
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        durationDays = try container.decodeIfPresent(Int.self, forKey: .durationDays)
+        doses = try container.decode([DoseEntry].self, forKey: .doses)
+        repeatEveryDays = Self.normalizedRepeatEveryDays(
+            try container.decodeIfPresent(Int.self, forKey: .repeatEveryDays) ?? 1
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encodeIfPresent(durationDays, forKey: .durationDays)
+        try container.encode(doses, forKey: .doses)
+        try container.encode(Self.normalizedRepeatEveryDays(repeatEveryDays), forKey: .repeatEveryDays)
+    }
+
+    private static func normalizedRepeatEveryDays(_ value: Int) -> Int {
+        min(max(value, repeatEveryDaysRange.lowerBound), repeatEveryDaysRange.upperBound)
     }
 }
 

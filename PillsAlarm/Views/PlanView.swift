@@ -404,6 +404,10 @@ private struct PhaseEditorView: View {
                 PhaseDateRangeView(dateRange: dateRange)
             }
 
+            Stepper(value: $phase.repeatEveryDays, in: PlanPhase.repeatEveryDaysRange) {
+                Text(repeatEveryDaysLabel)
+            }
+
             ForEach(doseTimes) { doseTime in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(doseTime.label)
@@ -433,6 +437,14 @@ private struct PhaseEditorView: View {
         } set: { value in
             phase.durationDays = value
         }
+    }
+
+    private var repeatEveryDaysLabel: String {
+        if phase.repeatEveryDays == 1 {
+            return "Opakování: Každý den"
+        }
+
+        return "Opakování: Každý \(phase.repeatEveryDays). den"
     }
 
     private func doseAmountBinding(for timeId: UUID) -> Binding<Double> {

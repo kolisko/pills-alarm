@@ -207,6 +207,75 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(medication.form, .tablet)
     }
 
+    func testPlanPhaseDecodingDefaultsMissingRepeatIntervalToDaily() throws {
+        let data = """
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "title": "Původní fáze",
+          "doses": []
+        }
+        """.data(using: .utf8)!
+
+        let phase = try JSONDecoder().decode(PlanPhase.self, from: data)
+
+        XCTAssertEqual(phase.repeatEveryDays, 1)
+    }
+
+    func testPlanPhaseEncodingPreservesRepeatInterval() throws {
+        let original = PlanPhase(
+            title: "Fáze",
+            durationDays: nil,
+            doses: [],
+            repeatEveryDays: 3
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(PlanPhase.self, from: data)
+
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.repeatEveryDays, 3)
+    }
+
+    func testPlanPhaseNormalizesRepeatIntervalToSupportedRange() {
+        let belowRange = PlanPhase(title: "Fáze", durationDays: nil, doses: [], repeatEveryDays: 0)
+        let aboveRange = PlanPhase(title: "Fáze", durationDays: nil, doses: [], repeatEveryDays: 31)
+
+        XCTAssertEqual(belowRange.repeatEveryDays, 1)
+        XCTAssertEqual(aboveRange.repeatEveryDays, 30)
+    }
+
+    func testScheduleEngineRepeatsFromStartOfPhase() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var medication = makeMedication(ownerUserRecordName: nil)
+        medication.phases[0].repeatEveryDays = 2
+
+        let doseCounts = (0...4).map { dayOffset in
+            let date = calendar.date(byAdding: .day, value: dayOffset, to: medication.startDate)!
+            return ScheduleEngine.doses(on: date, medication: medication, calendar: calendar).count
+        }
+
+        XCTAssertEqual(doseCounts, [1, 0, 1, 0, 1])
+    }
+
+    func testScheduleEngineRestartsRepeatIntervalForNewPhase() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var medication = makeMedication(ownerUserRecordName: nil)
+        let dose = medication.phases[0].doses[0]
+        medication.phases = [
+            PlanPhase(title: "Fáze 1", durationDays: 2, doses: [dose], repeatEveryDays: 2),
+            PlanPhase(title: "Fáze 2", durationDays: nil, doses: [dose], repeatEveryDays: 3)
+        ]
+
+        let generatedPhases = (0...5).map { dayOffset -> String? in
+            let date = calendar.date(byAdding: .day, value: dayOffset, to: medication.startDate)!
+            return ScheduleEngine.doses(on: date, medication: medication, calendar: calendar).first?.phaseTitle
+        }
+
+        XCTAssertEqual(generatedPhases, ["Fáze 1", nil, "Fáze 2", nil, nil, "Fáze 2"])
+    }
+
     func testScheduleEngineGeneratesSyrupDoseWithMilliliterAmount() {
         let time = DoseTime(
             id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,

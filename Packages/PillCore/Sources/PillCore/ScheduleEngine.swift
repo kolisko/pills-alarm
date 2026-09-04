@@ -21,9 +21,17 @@ public enum ScheduleEngine {
         workspaceName: String = "",
         calendar: Calendar = .current
     ) -> [GeneratedDose] {
-        guard let phase = phase(for: date, medication: medication, calendar: calendar) else {
+        guard let phaseOccurrence = phaseOccurrence(for: date, medication: medication, calendar: calendar) else {
             return []
         }
+        let repeatEveryDays = min(
+            max(phaseOccurrence.phase.repeatEveryDays, PlanPhase.repeatEveryDaysRange.lowerBound),
+            PlanPhase.repeatEveryDaysRange.upperBound
+        )
+        guard phaseOccurrence.dayOffset.isMultiple(of: repeatEveryDays) else {
+            return []
+        }
+        let phase = phaseOccurrence.phase
 
         return medication.doseTimes.compactMap { doseTime in
             guard let entry = phase.doses.first(where: { $0.timeId == doseTime.id }) else {
@@ -72,7 +80,11 @@ public enum ScheduleEngine {
         return "\(medicationId.uuidString)-\(timeId.uuidString)-\(String(format: "%04d%02d%02d", year, month, day))"
     }
 
-    private static func phase(for date: Date, medication: Medication, calendar: Calendar) -> PlanPhase? {
+    private static func phaseOccurrence(
+        for date: Date,
+        medication: Medication,
+        calendar: Calendar
+    ) -> (phase: PlanPhase, dayOffset: Int)? {
         let start = calendar.startOfDay(for: medication.startDate)
         let target = calendar.startOfDay(for: date)
         guard let dayOffset = calendar.dateComponents([.day], from: start, to: target).day, dayOffset >= 0 else {
@@ -82,16 +94,16 @@ public enum ScheduleEngine {
         var remaining = dayOffset
         for phase in medication.phases {
             guard let duration = phase.durationDays else {
-                return phase
+                return (phase, remaining)
             }
 
             if remaining < duration {
-                return phase
+                return (phase, remaining)
             }
 
             remaining -= duration
         }
 
-        return medication.phases.last(where: { $0.durationDays == nil })
+        return nil
     }
 }
