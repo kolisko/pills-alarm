@@ -281,6 +281,9 @@ private struct SyncSettingsView: View {
 private struct AlarmSettingsView: View {
     @EnvironmentObject private var store: MedicationStore
     @ObservedObject private var scheduler = NotificationScheduler.shared
+    @State private var isSchedulingTest = false
+    @State private var testStatusMessage: String?
+    @State private var testSucceeded = false
 
     var body: some View {
         List {
@@ -292,7 +295,7 @@ private struct AlarmSettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .disabled(scheduler.isChangingDeliveryMethod)
+                .disabled(scheduler.isChangingDeliveryMethod || isSchedulingTest)
 
                 if scheduler.isChangingDeliveryMethod {
                     HStack {
@@ -315,6 +318,39 @@ private struct AlarmSettingsView: View {
                 } else {
                     Text("AlarmKit je dostupný od iOS 26. Na tomto zařízení se používají lokální notifikace.")
                 }
+            }
+
+            Section {
+                Button {
+                    scheduleTestAlarm()
+                } label: {
+                    HStack {
+                        Label(
+                            "Naplánovat test za 1 minutu",
+                            systemImage: scheduler.deliveryMethod == .alarmKit
+                                ? "alarm.waves.left.and.right"
+                                : "bell.badge"
+                        )
+                        Spacer()
+                        if isSchedulingTest {
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(scheduler.isChangingDeliveryMethod || isSchedulingTest)
+
+                if let testStatusMessage {
+                    Label(
+                        testStatusMessage,
+                        systemImage: testSucceeded ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(testSucceeded ? .green : .red)
+                }
+            } header: {
+                Text("Test upozornění")
+            } footer: {
+                Text("Naplánuje jednorázový test pomocí právě vybraného způsobu upozornění. Běžné alarmy léků zůstanou beze změny.")
             }
 
             Section {
@@ -374,6 +410,27 @@ private struct AlarmSettingsView: View {
         } set: { method in
             Task {
                 await scheduler.selectDeliveryMethod(method, store: store)
+            }
+        }
+    }
+
+    private func scheduleTestAlarm() {
+        guard !isSchedulingTest else { return }
+
+        isSchedulingTest = true
+        testStatusMessage = nil
+        let method = scheduler.deliveryMethod
+
+        Task { @MainActor in
+            defer { isSchedulingTest = false }
+
+            do {
+                let scheduledDate = try await scheduler.scheduleTestAlarm()
+                testSucceeded = true
+                testStatusMessage = "\(method.title): test je naplánovaný na \(scheduledDate.formatted(date: .omitted, time: .standard))."
+            } catch {
+                testSucceeded = false
+                testStatusMessage = error.localizedDescription
             }
         }
     }

@@ -49,6 +49,8 @@ final class NotificationScheduler: ObservableObject {
     private static let alarmSettingsKey = "alarmSettings.v1"
     private static let deliveryMethodKey = "alarmDeliveryMethod.v1"
     private static let alarmKitInfoKey = "alarmKitScheduledInfo.v1"
+    private static let testNotificationIdentifier = "pillcare-test-notification"
+    private static let alarmKitTestID = UUID(uuidString: "E45F749D-5B66-4DC5-98C8-71BFCDF677C0")!
 
     private init() {
         alarmSettings = Self.loadAlarmSettings()
@@ -137,6 +139,31 @@ final class NotificationScheduler: ObservableObject {
         }
     }
 
+    func scheduleTestAlarm() async throws -> Date {
+        if let scheduleTask {
+            await scheduleTask.value
+        }
+
+        let scheduledDate = Date().addingTimeInterval(60)
+        switch deliveryMethod {
+        case .localNotifications:
+            guard await ensureAuthorization(for: .localNotifications) else {
+                throw AlarmSchedulingError.localNotificationsNotAuthorized
+            }
+            try await scheduleLocalTestNotification(at: scheduledDate)
+        case .alarmKit:
+            guard #available(iOS 26.0, *) else {
+                throw AlarmSchedulingError.alarmKitUnavailable
+            }
+            guard await ensureAuthorization(for: .alarmKit) else {
+                throw AlarmSchedulingError.alarmKitNotAuthorized
+            }
+            try await scheduleAlarmKitTest(at: scheduledDate)
+        }
+
+        return scheduledDate
+    }
+
     func pendingDoseAlarms() async -> [ScheduledAlarmInfo] {
         if deliveryMethod == .alarmKit, #available(iOS 26.0, *) {
             return pendingAlarmKitAlarms()
@@ -194,7 +221,11 @@ final class NotificationScheduler: ObservableObject {
     }
 
     private func scheduleLocalNotifications(_ alarms: [ScheduledDoseAlarm]) async throws -> Int {
-        center.removeAllPendingNotificationRequests()
+        let pendingRequests = await center.pendingNotificationRequests()
+        let doseRequestIDs = pendingRequests
+            .map(\.identifier)
+            .filter { $0 != Self.testNotificationIdentifier }
+        center.removePendingNotificationRequests(withIdentifiers: doseRequestIDs)
         var scheduledCount = 0
 
         for alarm in alarms {
@@ -210,6 +241,25 @@ final class NotificationScheduler: ObservableObject {
         }
 
         return scheduledCount
+    }
+
+    private func scheduleLocalTestNotification(at scheduledDate: Date) async throws {
+        let content = UNMutableNotificationContent()
+        content.title = "Test upozornění Pill Care"
+        content.body = "Pokud vidíte a slyšíte toto upozornění, lokální notifikace fungují."
+        content.sound = UNNotificationSound(named: UNNotificationSoundName(Self.doseAlarmSoundName))
+
+        let components = Calendar.current.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: scheduledDate
+        )
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: Self.testNotificationIdentifier,
+            content: content,
+            trigger: trigger
+        )
+        try await center.add(request)
     }
 
     private static func notificationRequest(for dose: GeneratedDose, scheduledDate: Date, repeatIndex: Int, calendar: Calendar) -> UNNotificationRequest {
@@ -290,8 +340,9 @@ final class NotificationScheduler: ObservableObject {
 
     @available(iOS 26.0, *)
     private func scheduleAlarmKitAlarms(_ alarms: [ScheduledDoseAlarm]) async throws -> Int {
-        try cancelAllAlarmKitAlarms()
-        var storedInfo: [StoredAlarmKitInfo] = []
+        let preservedTestInfo = try cancelDoseAlarmKitAlarmsPreservingTest()
+        var storedInfo = preservedTestInfo
+        var scheduledDoseIDs: [UUID] = []
 
         do {
             for alarm in alarms {
@@ -299,37 +350,86 @@ final class NotificationScheduler: ObservableObject {
                 let id = UUID()
                 let title = "\(alarm.dose.timeLabel): \(alarm.dose.medicationName)"
                 let body = "Dávka \(alarm.dose.amount). Potvrďte podání ve skupině."
-                let alert: AlarmPresentation.Alert
-                if #available(iOS 26.1, *) {
-                    alert = AlarmPresentation.Alert(title: LocalizedStringResource(stringLiteral: title))
-                } else {
-                    alert = AlarmPresentation.Alert(
-                        title: LocalizedStringResource(stringLiteral: title),
-                        stopButton: AlarmButton(text: "Zastavit", textColor: .white, systemImageName: "stop.fill")
-                    )
-                }
-                let presentation = AlarmPresentation(alert: alert)
-                let attributes = AlarmAttributes(
-                    presentation: presentation,
-                    metadata: DoseAlarmMetadata(body: body),
-                    tintColor: .teal
-                )
-                let configuration = AlarmManager.AlarmConfiguration.alarm(
-                    schedule: .fixed(alarm.scheduledDate),
-                    attributes: attributes,
-                    sound: .named(Self.doseAlarmSoundName)
-                )
-
-                _ = try await AlarmManager.shared.schedule(id: id, configuration: configuration)
+                try await scheduleAlarmKitAlarm(id: id, title: title, body: body, at: alarm.scheduledDate)
+                scheduledDoseIDs.append(id)
                 storedInfo.append(StoredAlarmKitInfo(id: id, title: title, body: body, scheduledDate: alarm.scheduledDate))
             }
         } catch {
-            try? cancelAllAlarmKitAlarms()
+            for id in scheduledDoseIDs {
+                try? AlarmManager.shared.cancel(id: id)
+            }
+            saveAlarmKitInfo(preservedTestInfo)
             throw error
         }
 
         saveAlarmKitInfo(storedInfo)
-        return storedInfo.count
+        return storedInfo.count - preservedTestInfo.count
+    }
+
+    @available(iOS 26.0, *)
+    private func scheduleAlarmKitTest(at scheduledDate: Date) async throws {
+        try? AlarmManager.shared.cancel(id: Self.alarmKitTestID)
+
+        var storedInfo = loadAlarmKitInfo().filter { $0.id != Self.alarmKitTestID }
+        saveAlarmKitInfo(storedInfo)
+
+        let title = "Test alarmu Pill Care"
+        let body = "Pokud vidíte a slyšíte tento alarm, AlarmKit funguje."
+        try await scheduleAlarmKitAlarm(
+            id: Self.alarmKitTestID,
+            title: title,
+            body: body,
+            at: scheduledDate
+        )
+        storedInfo.append(
+            StoredAlarmKitInfo(
+                id: Self.alarmKitTestID,
+                title: title,
+                body: body,
+                scheduledDate: scheduledDate
+            )
+        )
+        saveAlarmKitInfo(storedInfo)
+    }
+
+    @available(iOS 26.0, *)
+    private func scheduleAlarmKitAlarm(id: UUID, title: String, body: String, at scheduledDate: Date) async throws {
+        let alert: AlarmPresentation.Alert
+        if #available(iOS 26.1, *) {
+            alert = AlarmPresentation.Alert(title: LocalizedStringResource(stringLiteral: title))
+        } else {
+            alert = AlarmPresentation.Alert(
+                title: LocalizedStringResource(stringLiteral: title),
+                stopButton: AlarmButton(text: "Zastavit", textColor: .white, systemImageName: "stop.fill")
+            )
+        }
+        let presentation = AlarmPresentation(alert: alert)
+        let attributes = AlarmAttributes(
+            presentation: presentation,
+            metadata: DoseAlarmMetadata(body: body),
+            tintColor: .teal
+        )
+        let configuration = AlarmManager.AlarmConfiguration.alarm(
+            schedule: .fixed(scheduledDate),
+            attributes: attributes,
+            sound: .named(Self.doseAlarmSoundName)
+        )
+
+        _ = try await AlarmManager.shared.schedule(id: id, configuration: configuration)
+    }
+
+    @available(iOS 26.0, *)
+    private func cancelDoseAlarmKitAlarmsPreservingTest() throws -> [StoredAlarmKitInfo] {
+        let alarms = try AlarmManager.shared.alarms
+        let activeIDs = Set(alarms.map(\.id))
+
+        for alarm in alarms where alarm.id != Self.alarmKitTestID {
+            try AlarmManager.shared.cancel(id: alarm.id)
+        }
+
+        return loadAlarmKitInfo().filter {
+            $0.id == Self.alarmKitTestID && activeIDs.contains($0.id)
+        }
     }
 
     @available(iOS 26.0, *)
@@ -394,6 +494,7 @@ final class NotificationScheduler: ObservableObject {
 private enum AlarmSchedulingError: LocalizedError {
     case alarmKitUnavailable
     case alarmKitNotAuthorized
+    case localNotificationsNotAuthorized
 
     var errorDescription: String? {
         switch self {
@@ -401,6 +502,8 @@ private enum AlarmSchedulingError: LocalizedError {
             return "AlarmKit vyžaduje iOS 26 nebo novější."
         case .alarmKitNotAuthorized:
             return "AlarmKit není povolený v systémovém nastavení."
+        case .localNotificationsNotAuthorized:
+            return "Lokální notifikace nejsou povolené v systémovém nastavení."
         }
     }
 }
