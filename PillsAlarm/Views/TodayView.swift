@@ -437,6 +437,8 @@ private struct DoseRow: View {
     @State private var showsSkipConfirmation = false
     @State private var showsUndoConfirmation = false
     @State private var showsStatusDetails = false
+    @State private var isUpdatingDose = false
+    @State private var statusConflict: ConfirmDoseResult?
     var dose: GeneratedDose
 
     private var confirmation: DoseConfirmation? {
@@ -520,14 +522,12 @@ private struct DoseRow: View {
             } else if state.showsActions {
                 HStack {
                     Button {
-                        Task {
-                            try? await store.confirm(dose, status: .confirmed)
-                        }
+                        confirmDose(status: .confirmed)
                     } label: {
                         Label("Podat", systemImage: "checkmark.circle.fill")
                     }
                     .buttonStyle(DoseActionButtonStyle(kind: .primary))
-                    .disabled(store.isSyncing)
+                    .disabled(isUpdatingDose)
 
                     Spacer()
 
@@ -537,7 +537,7 @@ private struct DoseRow: View {
                         Label("Přeskočit", systemImage: "forward.circle")
                     }
                     .buttonStyle(DoseActionButtonStyle(kind: .secondary))
-                    .disabled(store.isSyncing)
+                    .disabled(isUpdatingDose)
                 }
             }
         }
@@ -552,9 +552,7 @@ private struct DoseRow: View {
             titleVisibility: .visible
         ) {
             Button("Přeskočit dávku", role: .destructive) {
-                Task {
-                    try? await store.confirm(dose, status: .skipped)
-                }
+                confirmDose(status: .skipped)
             }
             Button("Zrušit", role: .cancel) {}
         }
@@ -564,11 +562,45 @@ private struct DoseRow: View {
             titleVisibility: .visible
         ) {
             Button("Vrátit stav dávky", role: .destructive) {
+                guard !isUpdatingDose else { return }
+                isUpdatingDose = true
                 Task {
+                    defer { isUpdatingDose = false }
                     try? await store.undoConfirmation(for: dose)
                 }
             }
             Button("Zrušit", role: .cancel) {}
+        }
+        .alert(
+            "Dávka už má jiný stav",
+            isPresented: Binding(
+                get: { statusConflict != nil },
+                set: { if !$0 { statusConflict = nil } }
+            ),
+            presenting: statusConflict
+        ) { _ in
+            Button("Rozumím", role: .cancel) { statusConflict = nil }
+        } message: { result in
+            Text("""
+            \(dose.medicationName), \(dose.scheduledTime.label)
+
+            Požadovaný stav: \(result.requestedStatus.label).
+            Platí dříve uložený stav: \(result.confirmation.status.label).
+            \(store.displayName(for: result.confirmation) ?? "Neznámý člen") v \(result.confirmation.timestamp.shortTimeLabel).
+
+            Dřívější záznam zůstal zachován.
+            """)
+        }
+    }
+
+    private func confirmDose(status: DoseStatus) {
+        guard !isUpdatingDose else { return }
+        isUpdatingDose = true
+        Task {
+            defer { isUpdatingDose = false }
+            if let result = try? await store.confirm(dose, status: status), result.hasStatusConflict {
+                statusConflict = result
+            }
         }
     }
 
@@ -624,7 +656,7 @@ private struct DoseRow: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .disabled(store.isSyncing)
+            .disabled(isUpdatingDose)
         }
         .padding(14)
         .presentationCompactAdaptation(.popover)

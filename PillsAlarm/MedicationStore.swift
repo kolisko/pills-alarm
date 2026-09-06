@@ -381,36 +381,38 @@ final class MedicationStore: ObservableObject {
         return name.isEmpty ? nil : name
     }
 
-    func confirm(_ dose: GeneratedDose, status: DoseStatus, note: String = "") async throws {
+    @discardableResult
+    func confirm(_ dose: GeneratedDose, status: DoseStatus, note: String = "") async throws -> ConfirmDoseResult {
         guard let context = context(for: dose) else {
             let error = StoreError.missingCloudWorkspace
             recordSyncError(error)
             throw error
         }
 
-        let memberId = try await currentConfirmationMemberId(in: context)
-
-        let command = ConfirmDoseUseCase.makeCommand(
-            dose: dose,
-            status: status,
-            memberId: memberId,
-            timestamp: Date(),
-            note: note
-        )
-
         beginSync()
         defer { endSync() }
 
         do {
-            for eventId in command.eventIdsToCheck {
-                if try await cloud.fetchConfirmation(eventId: eventId, groupRecord: context.groupRecord, database: context.database) != nil {
-                    await reload(showSyncIndicator: false)
-                    return
+            let memberId = try await currentConfirmationMemberId(in: context)
+            let command = ConfirmDoseUseCase.makeCommand(
+                dose: dose,
+                status: status,
+                memberId: memberId,
+                timestamp: Date(),
+                note: note
+            )
+            let result = try await ConfirmDoseUseCase.execute(
+                command: command,
+                fetchConfirmation: { eventId in
+                    try await self.cloud.fetchConfirmation(eventId: eventId, groupRecord: context.groupRecord, database: context.database)
+                },
+                createIfAbsent: { confirmation in
+                    try await self.cloud.createConfirmationIfAbsent(confirmation, groupRecord: context.groupRecord, database: context.database)
                 }
-            }
-            try await cloud.saveConfirmation(command.confirmation, groupRecord: context.groupRecord, database: context.database)
-            upsertConfirmationLocally(command.confirmation, in: context)
+            )
+            upsertConfirmationLocally(result.confirmation, in: context)
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
+            return result
         } catch {
             recordSyncError(error)
             throw error

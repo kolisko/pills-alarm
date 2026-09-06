@@ -31,6 +31,7 @@
 		B10000000000000000000001 /* ConfirmationStateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* ConfirmationStateStoreTests.swift */; };
 		B10000000000000000000002 /* MedicationDomainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* MedicationDomainStoreTests.swift */; };
 		B10000000000000000000003 /* BusinessRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* BusinessRulesTests.swift */; };
+		B10000000000000000000004 /* ConfirmationPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* ConfirmationPersistenceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,6 +71,7 @@
 		A20000000000000000000033 /* StoreErrors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreErrors.swift; sourceTree = "<group>"; };
 		A20000000000000000000034 /* CloudKitModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitModels.swift; sourceTree = "<group>"; };
 		B20000000000000000000004 /* BusinessRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BusinessRulesTests.swift; sourceTree = "<group>"; };
+		B20000000000000000000005 /* ConfirmationPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationPersistenceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -152,6 +154,7 @@
 				B20000000000000000000001 /* ConfirmationStateStoreTests.swift */,
 				B20000000000000000000003 /* MedicationDomainStoreTests.swift */,
 				B20000000000000000000004 /* BusinessRulesTests.swift */,
+				B20000000000000000000005 /* ConfirmationPersistenceTests.swift */,
 			);
 			path = PillsAlarmTests;
 			sourceTree = "<group>";
@@ -280,6 +283,7 @@
 				B10000000000000000000001 /* ConfirmationStateStoreTests.swift in Sources */,
 				B10000000000000000000002 /* MedicationDomainStoreTests.swift in Sources */,
 				B10000000000000000000003 /* BusinessRulesTests.swift in Sources */,
+				B10000000000000000000004 /* ConfirmationPersistenceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

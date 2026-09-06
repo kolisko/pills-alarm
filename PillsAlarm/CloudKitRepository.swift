@@ -326,13 +326,77 @@ final class CloudKitRepository {
     }
 
     func saveConfirmation(_ confirmation: DoseConfirmation, groupRecord: CKRecord, database: CKDatabase) async throws {
+        // History moves and member relinking may update records; dose actions use createConfirmationIfAbsent.
+        let record = try confirmationRecord(confirmation, groupRecord: groupRecord)
+        _ = try await modify(recordsToSave: [record], recordIDsToDelete: [], in: database)
+    }
+
+    func createConfirmationIfAbsent(_ confirmation: DoseConfirmation, groupRecord: CKRecord, database: CKDatabase) async throws -> DoseConfirmation {
+        let record = try confirmationRecord(confirmation, groupRecord: groupRecord)
+        return try await Self.createConfirmationRecord(
+            record,
+            save: { record, policy in
+                try await self.modify(recordsToSave: [record], recordIDsToDelete: [], in: database, savePolicy: policy)
+            },
+            fetch: { try await self.fetchRecord(recordID: record.recordID, database: database) }
+        )
+    }
+
+    private func confirmationRecord(_ confirmation: DoseConfirmation, groupRecord: CKRecord) throws -> CKRecord {
         let record = CKRecord(recordType: RecordType.confirmation, recordID: CKRecord.ID(recordName: confirmationRecordName(eventId: confirmation.eventId), zoneID: groupRecord.recordID.zoneID))
         record[Field.eventId] = confirmation.eventId as CKRecordValue
         record[Field.medicationId] = confirmation.medicationId.uuidString as CKRecordValue
         record[Field.group] = CKRecord.Reference(recordID: groupRecord.recordID, action: .deleteSelf)
         record.setParent(groupRecord)
         record[Field.payload] = try JSONEncoder.cloud.encode(confirmation) as NSData
-        _ = try await modify(recordsToSave: [record], recordIDsToDelete: [], in: database)
+        return record
+    }
+
+    static func createConfirmationRecord(
+        _ record: CKRecord,
+        save: (CKRecord, CKModifyRecordsOperation.RecordSavePolicy) async throws -> [CKRecord],
+        fetch: () async throws -> CKRecord
+    ) async throws -> DoseConfirmation {
+        let authoritativeRecord: CKRecord
+        do {
+            // A fresh record has no change tag: an existing confirmation must never be overwritten.
+            let saved = try await save(record, .ifServerRecordUnchanged)
+            guard let savedRecord = saved.first(where: { $0.recordID == record.recordID }) else {
+                throw CKError(.internalError)
+            }
+            authoritativeRecord = savedRecord
+        } catch {
+            guard let conflict = confirmationConflict(error, recordID: record.recordID) else { throw error }
+            if let serverRecord = conflict.userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord,
+               serverRecord.recordID == record.recordID {
+                authoritativeRecord = serverRecord
+            } else {
+                authoritativeRecord = try await fetch()
+            }
+        }
+        guard authoritativeRecord.recordID == record.recordID,
+              authoritativeRecord.recordType == RecordType.confirmation,
+              let data = authoritativeRecord[Field.payload] as? Data,
+              let confirmation = try? JSONDecoder.cloud.decode(DoseConfirmation.self, from: data),
+              confirmation.eventId == record[Field.eventId] as? String
+        else { throw CKError(.internalError) }
+        return confirmation
+    }
+
+    private static func confirmationConflict(_ error: Error, recordID: CKRecord.ID) -> NSError? {
+        let error = error as NSError
+        if error.domain == CKError.errorDomain, error.code == CKError.serverRecordChanged.rawValue {
+            return error
+        }
+        if let partialErrors = error.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: NSError],
+           let recordError = partialErrors[recordID],
+           let conflict = confirmationConflict(recordError, recordID: recordID) {
+            return conflict
+        }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return confirmationConflict(underlying, recordID: recordID)
+        }
+        return nil
     }
 
     func fetchConfirmation(eventId: String, groupRecord: CKRecord, database: CKDatabase) async throws -> DoseConfirmation? {
@@ -801,21 +865,32 @@ final class CloudKitRepository {
         return false
     }
 
-    private func modify(recordsToSave: [CKRecord], recordIDsToDelete: [CKRecord.ID], in database: CKDatabase) async throws -> [CKRecord] {
+    private func modify(
+        recordsToSave: [CKRecord],
+        recordIDsToDelete: [CKRecord.ID],
+        in database: CKDatabase,
+        savePolicy: CKModifyRecordsOperation.RecordSavePolicy = .changedKeys
+    ) async throws -> [CKRecord] {
         try await withCheckedThrowingContinuation { continuation in
             var saved: [CKRecord] = []
+            var recordError: Error?
             let operation = CKModifyRecordsOperation(recordsToSave: recordsToSave, recordIDsToDelete: recordIDsToDelete)
-            operation.savePolicy = .changedKeys
+            operation.savePolicy = savePolicy
             operation.isAtomic = true
             operation.perRecordSaveBlock = { _, result in
-                if case .success(let record) = result {
-                    saved.append(record)
+                switch result {
+                case .success(let record): saved.append(record)
+                case .failure(let error): recordError = error
                 }
             }
             operation.modifyRecordsResultBlock = { result in
                 switch result {
                 case .success:
-                    continuation.resume(returning: saved)
+                    if let recordError {
+                        continuation.resume(throwing: recordError)
+                    } else {
+                        continuation.resume(returning: saved)
+                    }
                 case .failure(let error):
                     continuation.resume(throwing: error)
                 }

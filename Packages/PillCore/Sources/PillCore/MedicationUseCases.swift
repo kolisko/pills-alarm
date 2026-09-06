@@ -10,7 +10,35 @@ public struct ConfirmDoseCommand: Equatable, Sendable {
     }
 }
 
+public struct ConfirmDoseResult: Equatable, Sendable {
+    public let confirmation: DoseConfirmation
+    public let requestedStatus: DoseStatus
+
+    public var hasStatusConflict: Bool { confirmation.status != requestedStatus }
+
+    public init(confirmation: DoseConfirmation, requestedStatus: DoseStatus) {
+        self.confirmation = confirmation
+        self.requestedStatus = requestedStatus
+    }
+}
+
 public enum ConfirmDoseUseCase {
+    @MainActor
+    public static func execute(
+        command: ConfirmDoseCommand,
+        fetchConfirmation: (String) async throws -> DoseConfirmation?,
+        createIfAbsent: (DoseConfirmation) async throws -> DoseConfirmation
+    ) async throws -> ConfirmDoseResult {
+        // Keep recognizing legacy event IDs, but protect the canonical write on the server too.
+        for eventId in command.eventIdsToCheck {
+            if let existing = try await fetchConfirmation(eventId) {
+                return ConfirmDoseResult(confirmation: existing, requestedStatus: command.confirmation.status)
+            }
+        }
+        let saved = try await createIfAbsent(command.confirmation)
+        return ConfirmDoseResult(confirmation: saved, requestedStatus: command.confirmation.status)
+    }
+
     public static func makeCommand(
         dose: GeneratedDose,
         status: DoseStatus,
