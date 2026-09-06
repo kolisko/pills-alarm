@@ -98,7 +98,7 @@ final class NotificationScheduler: ObservableObject {
     }
 
     func rescheduleUpcomingDoses(store: MedicationStore) {
-        let alarms = makeUpcomingDoseAlarms(store: store)
+        let alarmGroups = makeUpcomingDoseAlarmGroups(store: store)
         let requestedMethod = deliveryMethod
         scheduleTask?.cancel()
         scheduleTask = Task { @MainActor [weak self] in
@@ -108,7 +108,7 @@ final class NotificationScheduler: ObservableObject {
                 let scheduledCount: Int
                 switch requestedMethod {
                 case .localNotifications:
-                    scheduledCount = try await self.scheduleLocalNotifications(alarms)
+                    scheduledCount = try await self.scheduleLocalNotifications(alarmGroups)
                     if #available(iOS 26.0, *) {
                         try? self.cancelAllAlarmKitAlarms()
                     }
@@ -119,7 +119,7 @@ final class NotificationScheduler: ObservableObject {
                     guard AlarmManager.shared.authorizationState == .authorized else {
                         throw AlarmSchedulingError.alarmKitNotAuthorized
                     }
-                    scheduledCount = try await self.scheduleAlarmKitAlarms(alarms)
+                    scheduledCount = try await self.scheduleAlarmKitAlarms(alarmGroups)
                     self.center.removeAllPendingNotificationRequests()
                 }
 
@@ -129,7 +129,7 @@ final class NotificationScheduler: ObservableObject {
             } catch is CancellationError {
             } catch {
                 if requestedMethod == .alarmKit {
-                    await self.fallbackToLocalNotifications(after: error, alarms: alarms)
+                    await self.fallbackToLocalNotifications(after: error, alarmGroups: alarmGroups)
                 } else {
                     self.lastScheduledCount = 0
                     self.lastSchedulingDate = Date()
@@ -208,19 +208,21 @@ final class NotificationScheduler: ObservableObject {
         }
     }
 
-    private func makeUpcomingDoseAlarms(store: MedicationStore) -> [ScheduledDoseAlarm] {
-        return AlarmSchedulingRules.upcomingAlarms(
+    private func makeUpcomingDoseAlarmGroups(store: MedicationStore) -> [ScheduledDoseAlarmGroup] {
+        let alarms = AlarmSchedulingRules.upcomingAlarms(
             now: Date(),
             settings: alarmSettings,
             dosesForDate: { store.doses(on: $0) },
             confirmationForDose: { store.confirmation(for: $0) },
             calendar: .current
         )
-        .prefix(Self.maxPendingRequests)
-        .map { $0 }
+
+        return AlarmSchedulingRules.groupedByMinute(alarms, calendar: .current)
+            .prefix(Self.maxPendingRequests)
+            .map { $0 }
     }
 
-    private func scheduleLocalNotifications(_ alarms: [ScheduledDoseAlarm]) async throws -> Int {
+    private func scheduleLocalNotifications(_ alarmGroups: [ScheduledDoseAlarmGroup]) async throws -> Int {
         let pendingRequests = await center.pendingNotificationRequests()
         let doseRequestIDs = pendingRequests
             .map(\.identifier)
@@ -228,14 +230,9 @@ final class NotificationScheduler: ObservableObject {
         center.removePendingNotificationRequests(withIdentifiers: doseRequestIDs)
         var scheduledCount = 0
 
-        for alarm in alarms {
+        for alarmGroup in alarmGroups {
             try Task.checkCancellation()
-            let request = Self.notificationRequest(
-                for: alarm.dose,
-                scheduledDate: alarm.scheduledDate,
-                repeatIndex: alarm.repeatIndex,
-                calendar: .current
-            )
+            let request = Self.notificationRequest(for: alarmGroup, calendar: .current)
             try await center.add(request)
             scheduledCount += 1
         }
@@ -262,16 +259,60 @@ final class NotificationScheduler: ObservableObject {
         try await center.add(request)
     }
 
-    private static func notificationRequest(for dose: GeneratedDose, scheduledDate: Date, repeatIndex: Int, calendar: Calendar) -> UNNotificationRequest {
+    private static func notificationRequest(for alarmGroup: ScheduledDoseAlarmGroup, calendar: Calendar) -> UNNotificationRequest {
+        let alarmContent = content(for: alarmGroup)
         let content = UNMutableNotificationContent()
-        content.title = "\(dose.timeLabel): \(dose.medicationName)"
-        content.body = "Dávka \(dose.amount). Potvrďte podání ve skupině."
+        content.title = alarmContent.title
+        content.body = alarmContent.body
         content.sound = UNNotificationSound(named: UNNotificationSoundName(Self.doseAlarmSoundName))
         content.badge = 1
 
-        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: scheduledDate)
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: alarmGroup.scheduledDate)
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-        return UNNotificationRequest(identifier: "\(dose.id)-alarm-\(repeatIndex)", content: content, trigger: trigger)
+        let timestamp = Int(alarmGroup.scheduledDate.timeIntervalSince1970)
+        return UNNotificationRequest(identifier: "dose-alarm-group-\(timestamp)", content: content, trigger: trigger)
+    }
+
+    private static func content(for alarmGroup: ScheduledDoseAlarmGroup) -> (title: String, body: String) {
+        guard let firstAlarm = alarmGroup.alarms.first else {
+            return (
+                title: "Připomínka léků",
+                body: "Zkontrolujte naplánované dávky v aplikaci."
+            )
+        }
+
+        guard alarmGroup.alarms.count > 1 else {
+            let dose = firstAlarm.dose
+            return (
+                title: "\(dose.timeLabel): \(dose.medicationName)",
+                body: "Dávka \(dose.amount). Potvrďte podání ve skupině."
+            )
+        }
+
+        let medications = alarmGroup.alarms.map(\.dose)
+        let uniqueMedicationNames = medications.reduce(into: [String]()) { names, dose in
+            if !names.contains(dose.medicationName) {
+                names.append(dose.medicationName)
+            }
+        }
+        let count = uniqueMedicationNames.count
+        let countLabel: String
+        switch count {
+        case 1:
+            countLabel = "1 lék"
+        case 2...4:
+            countLabel = "\(count) léky"
+        default:
+            countLabel = "\(count) léků"
+        }
+        let details = medications
+            .map { "\($0.medicationName): \($0.amount)" }
+            .joined(separator: ", ")
+
+        return (
+            title: "Čas na \(countLabel)",
+            body: "\(details). Potvrďte podání ve skupině."
+        )
     }
 
     private static func userFacingMessage(for error: Error) -> String {
@@ -339,20 +380,31 @@ final class NotificationScheduler: ObservableObject {
     }
 
     @available(iOS 26.0, *)
-    private func scheduleAlarmKitAlarms(_ alarms: [ScheduledDoseAlarm]) async throws -> Int {
+    private func scheduleAlarmKitAlarms(_ alarmGroups: [ScheduledDoseAlarmGroup]) async throws -> Int {
         let preservedTestInfo = try cancelDoseAlarmKitAlarmsPreservingTest()
         var storedInfo = preservedTestInfo
         var scheduledDoseIDs: [UUID] = []
 
         do {
-            for alarm in alarms {
+            for alarmGroup in alarmGroups {
                 try Task.checkCancellation()
                 let id = UUID()
-                let title = "\(alarm.dose.timeLabel): \(alarm.dose.medicationName)"
-                let body = "Dávka \(alarm.dose.amount). Potvrďte podání ve skupině."
-                try await scheduleAlarmKitAlarm(id: id, title: title, body: body, at: alarm.scheduledDate)
+                let alarmContent = Self.content(for: alarmGroup)
+                try await scheduleAlarmKitAlarm(
+                    id: id,
+                    title: alarmContent.title,
+                    body: alarmContent.body,
+                    at: alarmGroup.scheduledDate
+                )
                 scheduledDoseIDs.append(id)
-                storedInfo.append(StoredAlarmKitInfo(id: id, title: title, body: body, scheduledDate: alarm.scheduledDate))
+                storedInfo.append(
+                    StoredAlarmKitInfo(
+                        id: id,
+                        title: alarmContent.title,
+                        body: alarmContent.body,
+                        scheduledDate: alarmGroup.scheduledDate
+                    )
+                )
             }
         } catch {
             for id in scheduledDoseIDs {
@@ -461,14 +513,17 @@ final class NotificationScheduler: ObservableObject {
         .sorted { $0.scheduledDate < $1.scheduledDate }
     }
 
-    private func fallbackToLocalNotifications(after alarmKitError: Error, alarms: [ScheduledDoseAlarm]) async {
+    private func fallbackToLocalNotifications(
+        after alarmKitError: Error,
+        alarmGroups: [ScheduledDoseAlarmGroup]
+    ) async {
         if #available(iOS 26.0, *) {
             try? cancelAllAlarmKitAlarms()
         }
         deliveryMethod = .localNotifications
 
         do {
-            lastScheduledCount = try await scheduleLocalNotifications(alarms)
+            lastScheduledCount = try await scheduleLocalNotifications(alarmGroups)
             lastSchedulingError = "AlarmKit se nepodařilo naplánovat (\(Self.userFacingMessage(for: alarmKitError))). Byly obnoveny lokální notifikace."
         } catch {
             lastScheduledCount = 0

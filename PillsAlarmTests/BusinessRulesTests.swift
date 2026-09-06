@@ -378,6 +378,29 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertTrue(alarms.isEmpty)
     }
 
+    func testAlarmSchedulingRulesGroupEveryAlarmInTheSameMinute() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let firstDate = Date(timeIntervalSince1970: 1_725_778_800)
+        let firstDose = makeDose(id: "dose-a", scheduledDate: firstDate)
+        let secondDose = makeDose(id: "dose-b", scheduledDate: firstDate.addingTimeInterval(30))
+        let nextMinuteDose = makeDose(id: "dose-c", scheduledDate: firstDate.addingTimeInterval(60))
+
+        let groups = AlarmSchedulingRules.groupedByMinute(
+            [
+                ScheduledDoseAlarm(dose: nextMinuteDose, scheduledDate: nextMinuteDose.scheduledDate, repeatIndex: 0),
+                ScheduledDoseAlarm(dose: secondDose, scheduledDate: secondDose.scheduledDate, repeatIndex: 1),
+                ScheduledDoseAlarm(dose: firstDose, scheduledDate: firstDose.scheduledDate, repeatIndex: 0)
+            ],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].scheduledDate, firstDate)
+        XCTAssertEqual(groups[0].alarms.map(\.dose.id), ["dose-a", "dose-b"])
+        XCTAssertEqual(groups[1].alarms.map(\.dose.id), ["dose-c"])
+    }
+
     private func makeDose(
         id: String? = nil,
         baseEventId: String? = nil,

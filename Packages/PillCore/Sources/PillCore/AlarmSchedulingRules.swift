@@ -12,6 +12,16 @@ public struct ScheduledDoseAlarm: Equatable, Sendable {
     }
 }
 
+public struct ScheduledDoseAlarmGroup: Equatable, Sendable {
+    public var scheduledDate: Date
+    public var alarms: [ScheduledDoseAlarm]
+
+    public init(scheduledDate: Date, alarms: [ScheduledDoseAlarm]) {
+        self.scheduledDate = scheduledDate
+        self.alarms = alarms
+    }
+}
+
 public struct AlarmSettings: Codable, Equatable, Sendable {
     public var repeatIntervalMinutes: Int
     public var repeatDurationMinutes: Int
@@ -95,6 +105,35 @@ public enum AlarmSchedulingRules {
                 return lhs.dose.id < rhs.dose.id
             }
             return lhs.scheduledDate < rhs.scheduledDate
+        }
+    }
+
+    public static func groupedByMinute(
+        _ alarms: [ScheduledDoseAlarm],
+        calendar: Calendar = .current
+    ) -> [ScheduledDoseAlarmGroup] {
+        let grouped = Dictionary(grouping: alarms) { alarm in
+            calendar.dateInterval(of: .minute, for: alarm.scheduledDate)?.start ?? alarm.scheduledDate
+        }
+
+        return grouped.values.compactMap { alarms in
+            let sortedAlarms = alarms.sorted { lhs, rhs in
+                if lhs.scheduledDate != rhs.scheduledDate {
+                    return lhs.scheduledDate < rhs.scheduledDate
+                }
+                if lhs.dose.id != rhs.dose.id {
+                    return lhs.dose.id < rhs.dose.id
+                }
+                return lhs.repeatIndex < rhs.repeatIndex
+            }
+            guard let firstAlarm = sortedAlarms.first else { return nil }
+            return ScheduledDoseAlarmGroup(
+                scheduledDate: firstAlarm.scheduledDate,
+                alarms: sortedAlarms
+            )
+        }
+        .sorted { lhs, rhs in
+            lhs.scheduledDate < rhs.scheduledDate
         }
     }
 }
