@@ -3,6 +3,7 @@
 ## Git And Pull Requests
 
 - Work directly on `main` and push completed changes there; the owner is the sole developer.
-- When reviewing this repository's pull requests, automatically merge non-draft PRs into `main` without asking for another confirmation if code review finds no actionable issues and all applicable CI checks pass for the reviewed revision.
+- Only automatically merge PRs authored by the owner `kolisko` or the verified GitHub Dependabot app (`dependabot[bot]`, shown as `app/dependabot` by some APIs). Verify the actual GitHub identity, not a display name. Never automatically merge PRs from other people or unapproved automation accounts; leave them open.
+- When reviewing eligible pull requests, automatically merge non-draft PRs into `main` without asking for another confirmation if code review finds no actionable issues and all applicable builds, tests, and security checks pass for the reviewed revision.
 - Verify the exact reviewed head commit when merging. Do not bypass branch protection, pending or failing checks, merge conflicts, unresolved review findings, or requested changes.
 - Leave problematic PRs open and report the specific blocker. A green CI result alone does not replace code review.
