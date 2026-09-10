@@ -120,7 +120,7 @@ struct AlarmAuditView: View {
                 )
 
                 AuditRow(
-                    title: "Série pro dávky",
+                    title: "Série pro časy podání",
                     value: "\(scheduler.alarmSettings.repeatingDoseLimit) nejbližší",
                     systemImage: "list.number",
                     tint: .teal
@@ -382,14 +382,14 @@ private struct AlarmSettingsView: View {
                 )
 
                 Stepper(
-                    "Série pro dávky: \(scheduler.alarmSettings.repeatingDoseLimit)",
+                    "Série pro časy podání: \(scheduler.alarmSettings.repeatingDoseLimit)",
                     value: alarmSettingBinding(\.repeatingDoseLimit),
                     in: 1...5
                 )
             } header: {
                 Text("Opakovací série")
             } footer: {
-                Text("Opakování se vytváří jen pro nejbližší nepotvrzené dávky. Vzdálenější dávky mají první alarm a série se jim doplní, až na ně přijde řada.")
+                Text("Každá série zahrnuje všechny nepotvrzené léky ve stejný čas. Vzdálenější časy podání mají první alarm a série se jim doplní, až na ně přijde řada.")
             }
 
             Section {

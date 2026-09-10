@@ -290,12 +290,7 @@ final class NotificationScheduler: ObservableObject {
         }
 
         let medications = alarmGroup.alarms.map(\.dose)
-        let uniqueMedicationNames = medications.reduce(into: [String]()) { names, dose in
-            if !names.contains(dose.medicationName) {
-                names.append(dose.medicationName)
-            }
-        }
-        let count = uniqueMedicationNames.count
+        let count = alarmGroup.medicationCount
         let countLabel: String
         switch count {
         case 1:

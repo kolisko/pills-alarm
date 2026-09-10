@@ -1,6 +1,196 @@
 import XCTest
 @testable import PillCore
 
+final class AlarmGroupRegressionTests: XCTestCase {
+    private var calendar: Calendar {
+        var value = Calendar(identifier: .gregorian)
+        value.timeZone = TimeZone(identifier: "Europe/Prague")!
+        return value
+    }
+
+    private var morning: Date {
+        calendar.date(from: DateComponents(year: 2026, month: 9, day: 10, hour: 8))!
+    }
+
+    func testEveryRepeatIncludesAllDosesAtTheSameTimeRegardlessOfLimit() {
+        for count in [3, 8] {
+            let doses = (0..<count).map { makeDose("drug-\($0)") }
+            for limit in [1, 2, 5] {
+                for minutesAfterMorning in [-60, 0, 1] {
+                    let now = morning.addingTimeInterval(Double(minutesAfterMorning * 60))
+                    let result = groups(doses, now: now, limit: limit)
+                    XCTAssertEqual(result.count, minutesAfterMorning < 0 ? 9 : 8)
+                    for group in result {
+                        XCTAssertEqual(Set(group.alarms.map(\.dose.id)), Set(doses.map(\.id)))
+                        XCTAssertEqual(group.medicationCount, count)
+                        XCTAssertGreaterThan(group.scheduledDate, now)
+                    }
+                }
+            }
+        }
+    }
+
+    func testConfirmingOrSkippingDosesReducesRepeatsAndUndoRestoresThem() {
+        let doses = (0..<3).map { makeDose("drug-\($0)") }
+        let now = morning.addingTimeInterval(60)
+
+        for status in DoseStatus.allCases {
+            for resolvedCount in 0...3 {
+                let resolved = Set(doses.prefix(resolvedCount).map(\.id))
+                let result = groups(doses, now: now, resolved: resolved, status: status)
+                XCTAssertEqual(result.count, resolvedCount == 3 ? 0 : 8)
+                for group in result {
+                    XCTAssertEqual(group.medicationCount, 3 - resolvedCount)
+                    XCTAssertEqual(Set(group.alarms.map(\.dose.id)), Set(doses.dropFirst(resolvedCount).map(\.id)))
+                }
+            }
+        }
+
+        let restored = groups(doses, now: now)
+        XCTAssertEqual(restored.count, 8)
+        XCTAssertTrue(restored.allSatisfy { $0.medicationCount == 3 })
+    }
+
+    func testLimitCountsDistinctTimesAndPromotesNextTimeWhenEarlierDosesAreResolved() {
+        let first = (0..<3).map { makeDose("morning-\($0)") }
+        let second = (0..<2).map { makeDose("noon-\($0)", date: morning.addingTimeInterval(4 * 3600)) }
+        let third = (0..<2).map { makeDose("evening-\($0)", date: morning.addingTimeInterval(10 * 3600)) }
+        let doses = first + second + third
+        let initial = groups(doses, now: morning.addingTimeInterval(-3600)).flatMap(\.alarms)
+
+        XCTAssertEqual(Set(initial.filter { $0.repeatIndex > 0 }.map(\.dose.id)), Set((first + second).map(\.id)))
+        XCTAssertEqual(Set(initial.filter { $0.repeatIndex == 0 }.map(\.dose.id)), Set(doses.map(\.id)))
+
+        let afterConfirmation = groups(
+            doses, now: morning.addingTimeInterval(60), resolved: Set(first.map(\.id))
+        ).flatMap(\.alarms)
+        XCTAssertEqual(Set(afterConfirmation.filter { $0.repeatIndex > 0 }.map(\.dose.id)), Set((second + third).map(\.id)))
+        XCTAssertTrue(afterConfirmation.allSatisfy { !Set(first.map(\.id)).contains($0.dose.id) })
+    }
+
+    func testSameClockTimeOnDifferentDaysRemainsSeparate() {
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: morning)!
+        let doses = [makeDose("today-a"), makeDose("today-b"), makeDose("tomorrow", date: tomorrow)]
+        let alarms = groups(doses, now: morning.addingTimeInterval(-60), limit: 1).flatMap(\.alarms)
+
+        XCTAssertEqual(Set(alarms.filter { $0.repeatIndex > 0 }.map(\.dose.id)), ["today-a", "today-b"])
+        XCTAssertEqual(alarms.filter { $0.dose.id == "tomorrow" }.map(\.repeatIndex), [0])
+    }
+
+    func testDailyAndAlternateDayMedicationsRemainCompleteWhenPlannedTheDayBefore() {
+        let start = calendar.startOfDay(for: morning)
+        let medications = [
+            makeMedication("daily-a", start: start, interval: 1),
+            makeMedication("daily-b", start: start, interval: 1),
+            makeMedication("alternate", start: start, interval: 2)
+        ]
+        let now = calendar.date(byAdding: .day, value: -1, to: morning.addingTimeInterval(12 * 3600))!
+        let alarms = AlarmSchedulingRules.upcomingAlarms(
+            now: now, settings: .defaultValue,
+            dosesForDate: { ScheduleEngine.doses(on: $0, medications: medications, calendar: self.calendar) },
+            confirmationForDose: { _ in nil }, calendar: calendar
+        )
+        let result = AlarmSchedulingRules.groupedByMinute(alarms, calendar: calendar)
+
+        for (day, expectedCount) in [(0, 3), (1, 2), (2, 3)] {
+            let date = calendar.date(byAdding: .day, value: day, to: morning)!
+            let first = result.first { $0.scheduledDate == date }
+            XCTAssertEqual(first?.medicationCount, expectedCount)
+            let sameDay = result.filter { calendar.isDate($0.scheduledDate, inSameDayAs: date) }
+            XCTAssertEqual(sameDay.count, day < 2 ? 9 : 1)
+            XCTAssertTrue(sameDay.allSatisfy { $0.medicationCount == expectedCount })
+        }
+    }
+
+    func testMidnightRepeatsIncludeAllUnresolvedDosesAndRespectSeriesEnd() {
+        let midnight = calendar.startOfDay(for: morning)
+        let scheduled = midnight.addingTimeInterval(-15 * 60)
+        let doses = (0..<3).map { makeDose("drug-\($0)", date: scheduled) }
+        let result = groups(doses, now: midnight.addingTimeInterval(60), limit: 1)
+
+        XCTAssertEqual(result.count, 7)
+        XCTAssertTrue(result.allSatisfy { $0.medicationCount == 3 })
+        XCTAssertEqual(result.last?.scheduledDate, scheduled.addingTimeInterval(120 * 60))
+        XCTAssertTrue(groups(doses, now: scheduled.addingTimeInterval(120 * 60)).isEmpty)
+    }
+
+    func testRepeatingTimeUsesTheSameMinuteBoundaryAsAlarmGrouping() {
+        let doses = [0, 20, 59].enumerated().map {
+            makeDose("drug-\($0.offset)", date: morning.addingTimeInterval(Double($0.element)))
+        }
+        let result = groups(doses, now: morning.addingTimeInterval(-60), limit: 1)
+
+        XCTAssertEqual(result.count, 9)
+        XCTAssertTrue(result.allSatisfy { $0.medicationCount == 3 })
+    }
+
+    func testCountUsesMedicationIdentityNotDisplayNameOrNumberOfDoseEntries() {
+        var first = makeDose("first")
+        var second = makeDose("second")
+        first.medicationName = "Same name"
+        second.medicationName = "Same name"
+        var extraDoseOfFirst = first
+        extraDoseOfFirst.id = "first-extra-dose"
+        extraDoseOfFirst.timeId = UUID()
+        let result = groups([first, second, extraDoseOfFirst], now: morning.addingTimeInterval(-60))
+
+        XCTAssertEqual(result.count, 9)
+        XCTAssertTrue(result.allSatisfy { $0.alarms.count == 3 && $0.medicationCount == 2 })
+    }
+
+    func testExistingAlarmSettingsDecodeAndRoundTripWithoutMigration() throws {
+        let data = Data(#"{"repeatIntervalMinutes":20,"repeatDurationMinutes":100,"repeatingDoseLimit":2}"#.utf8)
+        let settings = try JSONDecoder().decode(AlarmSettings.self, from: data).normalized
+        XCTAssertEqual(settings, AlarmSettings(repeatIntervalMinutes: 20, repeatDurationMinutes: 100, repeatingDoseLimit: 2))
+        let encoded = try JSONEncoder().encode(settings)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Int])
+        XCTAssertEqual(object, ["repeatIntervalMinutes": 20, "repeatDurationMinutes": 100, "repeatingDoseLimit": 2])
+        XCTAssertEqual(try JSONDecoder().decode(AlarmSettings.self, from: encoded), settings)
+    }
+
+    func testNoDosesProducesNoAlarmGroups() {
+        XCTAssertTrue(groups([], now: morning).isEmpty)
+    }
+
+    private func groups(
+        _ doses: [GeneratedDose], now: Date, limit: Int = 2,
+        resolved: Set<String> = [], status: DoseStatus = .confirmed
+    ) -> [ScheduledDoseAlarmGroup] {
+        let alarms = AlarmSchedulingRules.upcomingAlarms(
+            now: now,
+            settings: AlarmSettings(repeatIntervalMinutes: 15, repeatDurationMinutes: 120, repeatingDoseLimit: limit),
+            dosesForDate: { date in doses.filter { self.calendar.isDate($0.scheduledDate, inSameDayAs: date) } },
+            confirmationForDose: { dose in
+                guard resolved.contains(dose.id) else { return nil }
+                return DoseBusinessRules.makeConfirmation(for: dose, status: status, memberId: UUID(), timestamp: now)
+            },
+            calendar: calendar
+        )
+        return AlarmSchedulingRules.groupedByMinute(alarms, calendar: calendar)
+    }
+
+    private func makeDose(_ id: String, date: Date? = nil) -> GeneratedDose {
+        let scheduledDate = date ?? morning
+        return GeneratedDose(
+            id: id, baseEventId: id, workspaceId: "personal", isShared: false,
+            workspaceName: "Personal", medicationId: UUID(), medicationName: id,
+            medicationNote: "", medicationColorHex: "#009999", timeId: UUID(),
+            timeLabel: "Morning", scheduledDate: scheduledDate,
+            scheduledTime: TimeOfDay(hour: calendar.component(.hour, from: scheduledDate), minute: calendar.component(.minute, from: scheduledDate)),
+            amount: "1", phaseTitle: "Phase 1"
+        )
+    }
+
+    private func makeMedication(_ name: String, start: Date, interval: Int) -> Medication {
+        let time = DoseTime(label: "Morning", time: TimeOfDay(hour: 8, minute: 0))
+        return Medication(
+            name: name, note: "", colorHex: "#009999", startDate: start, doseTimes: [time],
+            phases: [PlanPhase(title: "Phase 1", durationDays: nil, doses: [DoseEntry(timeId: time.id, amount: 1)], repeatEveryDays: interval)]
+        )
+    }
+}
+
+
 final class BusinessRulesTests: XCTestCase {
     func testDoseActionsAreAvailableOnlyAfterConfiguredLeadTime() {
         let dose = makeDose(scheduledDate: Date(timeIntervalSince1970: 1_725_778_800))

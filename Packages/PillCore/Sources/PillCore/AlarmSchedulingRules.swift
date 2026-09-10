@@ -16,6 +16,10 @@ public struct ScheduledDoseAlarmGroup: Equatable, Sendable {
     public var scheduledDate: Date
     public var alarms: [ScheduledDoseAlarm]
 
+    public var medicationCount: Int {
+        Set(alarms.map(\.dose.medicationId)).count
+    }
+
     public init(scheduledDate: Date, alarms: [ScheduledDoseAlarm]) {
         self.scheduledDate = scheduledDate
         self.alarms = alarms
@@ -25,6 +29,7 @@ public struct ScheduledDoseAlarmGroup: Equatable, Sendable {
 public struct AlarmSettings: Codable, Equatable, Sendable {
     public var repeatIntervalMinutes: Int
     public var repeatDurationMinutes: Int
+    // Keep the persisted key; this limit now counts administration times, not individual doses.
     public var repeatingDoseLimit: Int
 
     public init(repeatIntervalMinutes: Int, repeatDurationMinutes: Int, repeatingDoseLimit: Int) {
@@ -86,11 +91,12 @@ public enum AlarmSchedulingRules {
             }
         }
 
-        schedulableDoses.sort { $0.scheduledDate < $1.scheduledDate }
-        let repeatingDoseIds = Set(schedulableDoses.prefix(settings.repeatingDoseLimit).map(\.id))
+        let doseMinutes = Set(schedulableDoses.map { minuteStart(for: $0.scheduledDate, calendar: calendar) })
+        let repeatingMinutes = Set(doseMinutes.sorted().prefix(settings.repeatingDoseLimit))
 
         return schedulableDoses.flatMap { dose in
-            let offsets = repeatingDoseIds.contains(dose.id) ? repeatOffsets : [0]
+            let doseMinute = minuteStart(for: dose.scheduledDate, calendar: calendar)
+            let offsets = repeatingMinutes.contains(doseMinute) ? repeatOffsets : [0]
             return offsets.enumerated().compactMap { index, offset -> ScheduledDoseAlarm? in
                 guard let scheduledDate = calendar.date(byAdding: .minute, value: offset, to: dose.scheduledDate),
                       scheduledDate > now else {
@@ -113,7 +119,7 @@ public enum AlarmSchedulingRules {
         calendar: Calendar = .current
     ) -> [ScheduledDoseAlarmGroup] {
         let grouped = Dictionary(grouping: alarms) { alarm in
-            calendar.dateInterval(of: .minute, for: alarm.scheduledDate)?.start ?? alarm.scheduledDate
+            minuteStart(for: alarm.scheduledDate, calendar: calendar)
         }
 
         return grouped.values.compactMap { alarms in
@@ -135,5 +141,9 @@ public enum AlarmSchedulingRules {
         .sorted { lhs, rhs in
             lhs.scheduledDate < rhs.scheduledDate
         }
+    }
+
+    private static func minuteStart(for date: Date, calendar: Calendar) -> Date {
+        calendar.dateInterval(of: .minute, for: date)?.start ?? date
     }
 }
