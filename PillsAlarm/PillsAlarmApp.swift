@@ -150,6 +150,7 @@ struct PillsAlarmApp: App {
                 }
                 .onChange(of: scenePhase) {
                     if scenePhase == .active {
+                        NotificationScheduler.shared.restoreAlarmState()
                         cloudSync.startPeriodicReload(store: store, intervalMinutes: autoRefreshIntervalMinutes)
                         cloudSync.scheduleReload(store: store, delayNanoseconds: 250_000_000, forceFullRecovery: true)
                     } else {

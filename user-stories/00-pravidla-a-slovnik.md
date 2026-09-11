@@ -45,6 +45,8 @@ Pokud uživatel vrátí potvrzení nebo přeskočení, aplikace smaže odpovída
 ## Alarmy
 Lokální alarmy jsou odvozený stav. Aplikace je přepočítává z aktuálních plánů, potvrzení, přeskočení a lokálního nastavení alarmů.
 
+Upozornění používají pouze AlarmKit. Přepínač v nastavení platí jen pro toto zařízení. Vypnutí ruší všechny alarmy včetně testovacího a zůstává zachované po restartu i synchronizaci. Lokální notifikace se neplánují ani jako náhrada při chybě AlarmKitu. CloudKit silent push pro synchronizaci tím není vypnutý.
+
 ## Úrovně dopadu
 - `jedno zařízení` popisuje okamžitý dopad na zařízení, které akci provádí, po úspěšném CloudKit zápisu.
 - `private sync` popisuje propsání osobních dat mezi zařízeními stejného iCloud účtu.

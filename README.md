@@ -28,22 +28,23 @@ The app is built around a simple rule: CloudKit is the source of truth. Dose con
 - Share individual medication plans into a group while keeping personal plans private.
 - Preserve dose confirmation history when a plan is shared or removed from sharing.
 - Synchronize private and shared CloudKit zones with incremental updates, full recovery paths, and foreground refresh safeguards.
-- Schedule local notifications for upcoming and late-synced doses.
+- Enable or disable AlarmKit reminders for upcoming and late-synced doses on each device.
 
 ## Architecture
 
 The app separates core business rules from platform infrastructure:
 
 - `Packages/PillCore` contains pure domain models, scheduling logic, access rules, confirmation state handling, and unit tests.
-- `PillsAlarm` contains the SwiftUI app, CloudKit repository, notification scheduling, and UI composition.
+- `PillsAlarm` contains the SwiftUI app, CloudKit repository, AlarmKit scheduling, and UI composition.
 - `PillsAlarmTests` mirrors the important domain test coverage for the app target.
 
 CloudKit sync uses zone change tokens for efficient incremental reloads. Authoritative full refreshes are still used for first launch, manual refresh, foreground recovery, token invalidation, and network recovery so that stale local projections do not become the source of truth.
 
 ## Requirements
 
-- Xcode 16 or newer
+- Xcode 26 or newer
 - iOS 17 or newer
+- iOS 26 or newer for AlarmKit reminders
 - Swift 6
 - An Apple Developer account with CloudKit capability
 
@@ -62,6 +63,12 @@ The iOS target must have these capabilities enabled:
 - Background Modes / Remote notifications
 
 Entitlements are defined in `PillsAlarm/PillsAlarm.entitlements`.
+
+## Alarm Settings
+
+`Nastavení` > `Nastavení alarmů` has one AlarmKit switch. Turning it off cancels all app alarms, including the test alarm; reloads and restarts do not enable it again. Turning it on requests AlarmKit permission and schedules reminders from the current plans. Local notifications are no longer scheduled or used as a fallback. CloudKit silent pushes remain enabled for synchronization.
+
+The setting is local to each device. Existing AlarmKit users remain enabled after upgrading. New installations and the retired local-notification mode start with alarms off. Legacy local notifications are cleared when the app starts or returns to the foreground. No medication or CloudKit record migration is involved.
 
 ## Build And Test
 

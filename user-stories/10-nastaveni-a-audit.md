@@ -1,7 +1,7 @@
 # Nastavení a audit
 
 ## Cíl
-Uživatel nebo tester chce ověřit verzi aplikace, CloudKit prostředí, stav notifikací a aktuálně naplánované alarmy.
+Uživatel nebo tester chce ověřit verzi aplikace, CloudKit prostředí, stav AlarmKitu a aktuálně naplánované alarmy.
 
 ## Předpoklady
 Aplikace je spuštěná a uživatel má dostupnou záložku `Nastavení`.
@@ -10,11 +10,11 @@ Aplikace je spuštěná a uživatel má dostupnou záložku `Nastavení`.
 1. Uživatel otevře `Nastavení`.
 2. Aplikace zobrazí položky `Alarmy`, `Nastavení alarmů` a `Verze`.
 3. Uživatel otevře `Alarmy`.
-4. Aplikace zobrazí stav notifikačních oprávnění.
+4. Aplikace zobrazí zapnutí alarmů na tomto zařízení a stav oprávnění AlarmKit.
 5. Aplikace zobrazí počet čekajících alarmů a čas posledního přeplánování.
 6. Uživatel vidí seznam nejbližších čekajících alarmů.
 7. Uživatel klepne na `Přeplánovat alarmy`.
-8. Aplikace přepočítá alarmy podle aktuálních cloudových dat.
+8. Aplikace přepočítá alarmy podle aktuálních cloudových dat, pokud jsou zapnuté; jinak je zruší.
 9. Uživatel otevře `Verze`.
 10. Aplikace zobrazí verzi, build, typ buildu, CloudKit prostředí, push prostředí, bundle identifier a iCloud container.
 
@@ -23,5 +23,5 @@ Tester dokáže z aplikace poznat, jaký build běží, proti jakému prostřed�
 
 ## Chybové stavy
 - Pokud nejsou žádné alarmy, aplikace zobrazí prázdný stav.
-- Pokud notifikace nejsou povolené, aplikace to jasně ukáže.
+- Pokud AlarmKit není povolený nebo jsou alarmy vypnuté, aplikace to jasně ukáže.
 - Pokud přeplánování selže, aplikace zobrazí chybu bez posunutí hlavního layoutu.

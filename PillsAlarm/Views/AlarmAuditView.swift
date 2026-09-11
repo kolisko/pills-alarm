@@ -1,5 +1,4 @@
 import SwiftUI
-import UserNotifications
 import PillCore
 
 struct SettingsView: View {
@@ -62,46 +61,24 @@ private struct SettingsNavigationRow: View {
 struct AlarmAuditView: View {
     @EnvironmentObject private var store: MedicationStore
     @ObservedObject private var scheduler = NotificationScheduler.shared
-    @State private var settings: UNNotificationSettings?
     @State private var pendingAlarms: [ScheduledAlarmInfo] = []
-    @State private var alarmKitAuthorization = AlarmAuthorizationStatus(label: "Načítám", isUsable: false)
+    @State private var alarmKitAuthorization = AlarmAuthorizationStatus.unknown
 
     var body: some View {
         List {
-            Section("Oprávnění") {
+            Section("AlarmKit") {
                 AuditRow(
-                    title: "Způsob",
-                    value: scheduler.deliveryMethod.title,
-                    systemImage: scheduler.deliveryMethod == .alarmKit ? "alarm.waves.left.and.right" : "bell.badge.fill",
-                    tint: .teal
+                    title: "Alarmy",
+                    value: scheduler.alarmsEnabled ? "Zapnuté" : "Vypnuté",
+                    systemImage: scheduler.alarmsEnabled ? "alarm.waves.left.and.right" : "bell.slash",
+                    tint: scheduler.alarmsEnabled ? .teal : .secondary
                 )
-                if scheduler.deliveryMethod == .alarmKit {
-                    AuditRow(
-                        title: "AlarmKit",
-                        value: alarmKitAuthorization.label,
-                        systemImage: alarmKitAuthorization.isUsable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
-                        tint: alarmKitAuthorization.isUsable ? .green : .orange
-                    )
-                } else {
-                    AuditRow(
-                        title: "Notifikace",
-                        value: authorizationLabel,
-                        systemImage: authorizationIsUsable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
-                        tint: authorizationIsUsable ? .green : .orange
-                    )
-                    AuditRow(
-                        title: "Zvuk",
-                        value: settingLabel(settings?.soundSetting),
-                        systemImage: settings?.soundSetting == .enabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                        tint: settings?.soundSetting == .enabled ? .green : .orange
-                    )
-                    AuditRow(
-                        title: "Critical Alerts",
-                        value: settingLabel(settings?.criticalAlertSetting),
-                        systemImage: settings?.criticalAlertSetting == .enabled ? "exclamationmark.octagon.fill" : "exclamationmark.octagon",
-                        tint: settings?.criticalAlertSetting == .enabled ? .green : .secondary
-                    )
-                }
+                AuditRow(
+                    title: "Oprávnění",
+                    value: alarmKitAuthorization.label,
+                    systemImage: alarmKitAuthorization.isUsable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                    tint: alarmKitAuthorization.isUsable ? .green : .orange
+                )
             }
 
             Section("Plánování") {
@@ -148,10 +125,7 @@ struct AlarmAuditView: View {
 
                 Button {
                     scheduler.rescheduleUpcomingDoses(store: store)
-                    Task {
-                        try? await Task.sleep(nanoseconds: 350_000_000)
-                        await refreshAudit()
-                    }
+                    Task { await refreshAudit() }
                 } label: {
                     Label("Přeplánovat alarmy", systemImage: "arrow.clockwise")
                 }
@@ -193,53 +167,7 @@ struct AlarmAuditView: View {
         }
     }
 
-    private var authorizationLabel: String {
-        guard let status = settings?.authorizationStatus else {
-            return "Načítám"
-        }
-
-        switch status {
-        case .notDetermined:
-            return "Nevyžádáno"
-        case .denied:
-            return "Zakázáno"
-        case .authorized:
-            return "Povoleno"
-        case .provisional:
-            return "Dočasně povoleno"
-        case .ephemeral:
-            return "Dočasné"
-        @unknown default:
-            return "Neznámé"
-        }
-    }
-
-    private var authorizationIsUsable: Bool {
-        switch settings?.authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func settingLabel(_ setting: UNNotificationSetting?) -> String {
-        guard let setting else { return "Načítám" }
-
-        switch setting {
-        case .enabled:
-            return "Povoleno"
-        case .disabled:
-            return "Zakázáno"
-        case .notSupported:
-            return "Nepodporováno"
-        @unknown default:
-            return "Neznámé"
-        }
-    }
-
     private func refreshAudit() async {
-        settings = await scheduler.notificationSettings()
         alarmKitAuthorization = scheduler.alarmKitAuthorizationStatus()
         pendingAlarms = await scheduler.pendingDoseAlarms()
     }
@@ -288,16 +216,10 @@ private struct AlarmSettingsView: View {
     var body: some View {
         List {
             Section {
-                Picker("Způsob upozornění", selection: deliveryMethodBinding) {
-                    Text("Notifikace").tag(AlarmDeliveryMethod.localNotifications)
-                    if #available(iOS 26.0, *) {
-                        Text("AlarmKit").tag(AlarmDeliveryMethod.alarmKit)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .disabled(scheduler.isChangingDeliveryMethod || isSchedulingTest)
+                Toggle("AlarmKit", isOn: alarmsEnabledBinding)
+                    .disabled(scheduler.isChangingAlarmState || !scheduler.isAlarmKitAvailable)
 
-                if scheduler.isChangingDeliveryMethod {
+                if scheduler.isChangingAlarmState {
                     HStack {
                         ProgressView()
                         Text("Nastavuji alarmy…")
@@ -311,12 +233,12 @@ private struct AlarmSettingsView: View {
                         .foregroundStyle(.red)
                 }
             } header: {
-                Text("Způsob upozornění")
+                Text("Alarmy")
             } footer: {
                 if #available(iOS 26.0, *) {
                     Text("AlarmKit zobrazí výrazný systémový alarm i při zapnutém tichém režimu nebo soustředění. Volba platí jen pro toto zařízení.")
                 } else {
-                    Text("AlarmKit je dostupný od iOS 26. Na tomto zařízení se používají lokální notifikace.")
+                    Text("Alarmy vyžadují iOS 26 nebo novější. Na tomto zařízení jsou vypnuté.")
                 }
             }
 
@@ -327,9 +249,7 @@ private struct AlarmSettingsView: View {
                     HStack {
                         Label(
                             "Naplánovat test za 1 minutu",
-                            systemImage: scheduler.deliveryMethod == .alarmKit
-                                ? "alarm.waves.left.and.right"
-                                : "bell.badge"
+                            systemImage: "alarm.waves.left.and.right"
                         )
                         Spacer()
                         if isSchedulingTest {
@@ -337,7 +257,7 @@ private struct AlarmSettingsView: View {
                         }
                     }
                 }
-                .disabled(scheduler.isChangingDeliveryMethod || isSchedulingTest)
+                .disabled(!scheduler.alarmsEnabled || scheduler.isChangingAlarmState || isSchedulingTest)
 
                 if let testStatusMessage {
                     Label(
@@ -348,9 +268,9 @@ private struct AlarmSettingsView: View {
                     .foregroundStyle(testSucceeded ? .green : .red)
                 }
             } header: {
-                Text("Test upozornění")
+                Text("Test alarmu")
             } footer: {
-                Text("Naplánuje jednorázový test pomocí právě vybraného způsobu upozornění. Běžné alarmy léků zůstanou beze změny.")
+                Text("Běžné alarmy léků zůstanou beze změny.")
             }
 
             Section {
@@ -404,12 +324,13 @@ private struct AlarmSettingsView: View {
         .navigationTitle("Nastavení alarmů")
     }
 
-    private var deliveryMethodBinding: Binding<AlarmDeliveryMethod> {
+    private var alarmsEnabledBinding: Binding<Bool> {
         Binding {
-            scheduler.deliveryMethod
-        } set: { method in
+            scheduler.alarmsEnabled
+        } set: { enabled in
+            testStatusMessage = nil
             Task {
-                await scheduler.selectDeliveryMethod(method, store: store)
+                await scheduler.setAlarmsEnabled(enabled, store: store)
             }
         }
     }
@@ -419,7 +340,6 @@ private struct AlarmSettingsView: View {
 
         isSchedulingTest = true
         testStatusMessage = nil
-        let method = scheduler.deliveryMethod
 
         Task { @MainActor in
             defer { isSchedulingTest = false }
@@ -427,7 +347,9 @@ private struct AlarmSettingsView: View {
             do {
                 let scheduledDate = try await scheduler.scheduleTestAlarm()
                 testSucceeded = true
-                testStatusMessage = "\(method.title): test je naplánovaný na \(scheduledDate.formatted(date: .omitted, time: .standard))."
+                testStatusMessage = "Test je naplánovaný na \(scheduledDate.formatted(date: .omitted, time: .standard))."
+            } catch is CancellationError {
+                testStatusMessage = nil
             } catch {
                 testSucceeded = false
                 testStatusMessage = error.localizedDescription

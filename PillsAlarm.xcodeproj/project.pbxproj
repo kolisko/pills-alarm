@@ -32,6 +32,7 @@
 		B10000000000000000000002 /* MedicationDomainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* MedicationDomainStoreTests.swift */; };
 		B10000000000000000000003 /* BusinessRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* BusinessRulesTests.swift */; };
 		B10000000000000000000004 /* ConfirmationPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* ConfirmationPersistenceTests.swift */; };
+		B10000000000000000000005 /* AlarmSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000006 /* AlarmSchedulerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +73,7 @@
 		A20000000000000000000034 /* CloudKitModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitModels.swift; sourceTree = "<group>"; };
 		B20000000000000000000004 /* BusinessRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BusinessRulesTests.swift; sourceTree = "<group>"; };
 		B20000000000000000000005 /* ConfirmationPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationPersistenceTests.swift; sourceTree = "<group>"; };
+		B20000000000000000000006 /* AlarmSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmSchedulerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -155,6 +157,7 @@
 				B20000000000000000000003 /* MedicationDomainStoreTests.swift */,
 				B20000000000000000000004 /* BusinessRulesTests.swift */,
 				B20000000000000000000005 /* ConfirmationPersistenceTests.swift */,
+				B20000000000000000000006 /* AlarmSchedulerTests.swift */,
 			);
 			path = PillsAlarmTests;
 			sourceTree = "<group>";
@@ -284,6 +287,7 @@
 				B10000000000000000000002 /* MedicationDomainStoreTests.swift in Sources */,
 				B10000000000000000000003 /* BusinessRulesTests.swift in Sources */,
 				B10000000000000000000004 /* ConfirmationPersistenceTests.swift in Sources */,
+				B10000000000000000000005 /* AlarmSchedulerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

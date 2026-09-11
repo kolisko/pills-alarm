@@ -1,6 +1,5 @@
 import CloudKit
 import UIKit
-import UserNotifications
 
 extension Notification.Name {
     static let cloudKitDataDidChange = Notification.Name("cloudKitDataDidChange")
@@ -21,22 +20,14 @@ final class CloudKitRefreshRequest {
     }
 }
 
-final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        UNUserNotificationCenter.current().delegate = self
+        NotificationScheduler.shared.restoreAlarmState()
         application.registerForRemoteNotifications()
         return true
-    }
-
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        completionHandler([.banner, .list, .sound, .badge])
     }
 
     func application(
