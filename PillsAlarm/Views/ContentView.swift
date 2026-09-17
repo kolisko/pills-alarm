@@ -4,8 +4,7 @@ import PillCore
 
 struct ContentView: View {
     @EnvironmentObject private var store: MedicationStore
-    @State private var selectedTab: AppTab = .today
-    @State private var todayReturnToTodayTrigger: UUID?
+    @ObservedObject private var navigation = AppNavigation.shared
 
     var body: some View {
         Group {
@@ -26,7 +25,7 @@ struct ContentView: View {
                             .presentationDragIndicator(.visible)
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .cloudKitShareDidAccept)) { _ in
-                        selectedTab = .group
+                        navigation.selectedTab = .group
                     }
             }
         }
@@ -39,11 +38,11 @@ struct ContentView: View {
     }
 
     private var appTabs: some View {
-        TabView(selection: $selectedTab) {
-            TodayView(returnToTodayTrigger: todayReturnToTodayTrigger)
+        TabView(selection: $navigation.selectedTab) {
+            TodayView(returnToTodayTrigger: navigation.returnToTodayTrigger)
                 .background {
-                    TabBarReselectGestureObserver(selectedTab: selectedTab, observedTab: .today) {
-                        todayReturnToTodayTrigger = UUID()
+                    TabBarReselectGestureObserver(selectedTab: navigation.selectedTab, observedTab: .today) {
+                        navigation.openToday()
                     }
                 }
                 .tabItem {
@@ -83,14 +82,6 @@ struct ContentView: View {
             NotificationScheduler.shared.rescheduleUpcomingDoses(store: store)
         }
     }
-}
-
-private enum AppTab: Hashable {
-    case today
-    case plan
-    case group
-    case history
-    case settings
 }
 
 private struct TabBarReselectGestureObserver: UIViewControllerRepresentable {

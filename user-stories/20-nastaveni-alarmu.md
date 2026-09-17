@@ -22,6 +22,16 @@ Pro zapnutí alarmů je potřeba iOS 26 nebo novější a oprávnění AlarmKit.
 ## Očekávaný výsledek
 Upozornění používají pouze AlarmKit, nebo jsou vypnutá. Nastavení platí jen pro toto zařízení; plány, potvrzení, sdílení a synchronizace se nemění. Aktualizace zachová zapnutý stav dosavadním uživatelům AlarmKitu. Nová instalace a původní režim lokálních notifikací začínají s alarmy vypnutými.
 
+## Otevření aplikace z alarmu
+1. Uživatel naplánuje test za jednu minutu a přepne aplikaci na jinou záložku nebo ji přesune do pozadí.
+2. Běžící alarm nabídne vedle systémového zastavení tlačítko `Otevřít`.
+3. Klepnutí na `Otevřít` přenese aplikaci do popředí a zvolí záložku `Dnes` s aktuálním dnem.
+4. Stejnou akci je potřeba ověřit při ukončené aplikaci, při zobrazeném jiném dni a při opakovaném otevření z dalšího alarmu.
+5. Otevření samo nepotvrdí ani nepřeskočí žádnou dávku. Uživatel podání potvrzuje běžným tlačítkem v aplikaci.
+6. Akce je stejná pro testovací i běžné dávkové alarmy. Systémové zastavení zůstává bez vlastní akce pro otevření aplikace.
+
+Systémové zobrazení a přechod ze zamčené obrazovky je nutné ověřit také na fyzickém iPhonu. Aktualizované tlačítko se objeví u nově naplánovaných nebo přeplánovaných alarmů.
+
 ## Chybové stavy
 - Pokud uživatel nastaví hodnotu mimo povolený rozsah, aplikace ji omezí na platnou mez.
 - Pokud přeplánování selže, aplikace zobrazí chybu.

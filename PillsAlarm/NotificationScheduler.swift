@@ -376,13 +376,20 @@ private final class SystemAlarmKitClient: AlarmKitScheduling {
 
     func schedule(_ info: StoredAlarmKitInfo) async throws {
         guard #available(iOS 26.0, *) else { throw AlarmSchedulingError.alarmKitUnavailable }
+        let openButton = AlarmButton(text: "Otevřít", textColor: .white, systemImageName: "arrow.up.forward.app")
         let alert: AlarmPresentation.Alert
         if #available(iOS 26.1, *) {
-            alert = AlarmPresentation.Alert(title: LocalizedStringResource(stringLiteral: info.title))
+            alert = AlarmPresentation.Alert(
+                title: LocalizedStringResource(stringLiteral: info.title),
+                secondaryButton: openButton,
+                secondaryButtonBehavior: .custom
+            )
         } else {
             alert = AlarmPresentation.Alert(
                 title: LocalizedStringResource(stringLiteral: info.title),
-                stopButton: AlarmButton(text: "Zastavit", textColor: .white, systemImageName: "stop.fill")
+                stopButton: AlarmButton(text: "Zastavit", textColor: .white, systemImageName: "stop.fill"),
+                secondaryButton: openButton,
+                secondaryButtonBehavior: .custom
             )
         }
         let attributes = AlarmAttributes(
@@ -391,6 +398,7 @@ private final class SystemAlarmKitClient: AlarmKitScheduling {
         )
         let configuration = AlarmManager.AlarmConfiguration.alarm(
             schedule: .fixed(info.scheduledDate), attributes: attributes,
+            secondaryIntent: OpenPillsAppIntent(),
             sound: .named(NotificationScheduler.doseAlarmSoundName)
         )
         _ = try await AlarmManager.shared.schedule(id: info.id, configuration: configuration)
