@@ -25,12 +25,16 @@ Upozornění používají pouze AlarmKit, nebo jsou vypnutá. Nastavení platí 
 ## Otevření aplikace z alarmu
 1. Uživatel naplánuje test za jednu minutu a přepne aplikaci na jinou záložku nebo ji přesune do pozadí.
 2. Běžící alarm nabídne vedle systémového zastavení tlačítko `Otevřít`.
-3. Klepnutí na `Otevřít` přenese aplikaci do popředí a zvolí záložku `Dnes` s aktuálním dnem.
+3. Klepnutí na `Otevřít` zastaví konkrétní zvonící alarm, přenese aplikaci do popředí a zvolí záložku `Dnes` s aktuálním dnem. Budoucí alarmy ani další připomínky tím nejsou zrušené.
 4. Stejnou akci je potřeba ověřit při ukončené aplikaci, při zobrazeném jiném dni a při opakovaném otevření z dalšího alarmu.
 5. Otevření samo nepotvrdí ani nepřeskočí žádnou dávku. Uživatel podání potvrzuje běžným tlačítkem v aplikaci.
 6. Akce je stejná pro testovací i běžné dávkové alarmy. Systémové zastavení zůstává bez vlastní akce pro otevření aplikace.
 
 Systémové zobrazení a přechod ze zamčené obrazovky je nutné ověřit také na fyzickém iPhonu. Aktualizované tlačítko se objeví u nově naplánovaných nebo přeplánovaných alarmů.
+
+Akce dostává ID konkrétního alarmu. Opakované otevření již skončeného alarmu nic dalšího nezastaví. U starších alarmů bez předaného ID lze zastavit jediný jednoznačně zvonící alarm; při nejednoznačnosti aplikace nesmí rušit jiné alarmy. Pokud systémové zastavení selže, aplikace zkusí zrušit pouze tentýž stále zvonící jednorázový alarm. Chyba obou operací se nezamlčí.
+
+Test `AlarmSchedulerTests.testOpenIntentStopsRealAlarmKitAlarm` je ručně spouštěný integrační test pro izolovaný simulátor bez existujících alarmů. Aktivuje se proměnnou testovacího procesu `PILLCARE_REAL_ALARMKIT_TEST=1`; jinak se přeskočí. Ověřuje skutečný stav `alerting`, zastavení přes produkční App Intent a zachování budoucího alarmu. Nenahrazuje kontrolu klepnutí ze zamčené obrazovky fyzického telefonu.
 
 ## Chybové stavy
 - Pokud uživatel nastaví hodnotu mimo povolený rozsah, aplikace ji omezí na platnou mez.

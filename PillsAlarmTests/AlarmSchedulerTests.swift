@@ -1,9 +1,65 @@
 import XCTest
+import AlarmKit
 import PillCore
 @testable import PillsAlarm
 
 @MainActor
 final class AlarmSchedulerTests: XCTestCase {
+    func testOpenIntentStopsRealAlarmKitAlarm() async throws {
+#if targetEnvironment(simulator)
+        guard ProcessInfo.processInfo.environment["PILLCARE_REAL_ALARMKIT_TEST"] == "1" else {
+            throw XCTSkip("Opt-in real AlarmKit test; requires permission in an isolated simulator")
+        }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("AlarmKit requires iOS 26") }
+        guard try AlarmManager.shared.alarms.isEmpty else {
+            throw XCTSkip("Run only in a simulator without existing alarms")
+        }
+        let scheduler = NotificationScheduler.shared
+        let previouslyEnabled = scheduler.alarmsEnabled
+        await scheduler.setAlarmsEnabled(true) { [] }
+        guard scheduler.alarmsEnabled else {
+            XCTFail("Allow AlarmKit in the simulator to run this test")
+            return
+        }
+        var failure: Error?
+        do {
+            let firingDate = Date().addingTimeInterval(8)
+            let futureDate = Date().addingTimeInterval(300)
+            try await scheduler.rescheduleAlarmGroups([
+                makeGroup("AlarmKit stop smoke test", at: firingDate),
+                makeGroup("Preserved future alarm", at: futureDate)
+            ]).value
+            let initialAlarms = try AlarmManager.shared.alarms
+            let firingAlarm = try XCTUnwrap(initialAlarms.first {
+                if case .fixed(let date)? = $0.schedule { return abs(date.timeIntervalSince(firingDate)) < 1 }
+                return false
+            })
+            let futureAlarm = try XCTUnwrap(initialAlarms.first { $0.id != firingAlarm.id })
+            let deadline = Date().addingTimeInterval(30)
+            while Date() < deadline,
+                  try !AlarmManager.shared.alarms.contains(where: { $0.id == firingAlarm.id && $0.state == .alerting }) {
+                try await Task.sleep(for: .milliseconds(200))
+            }
+            XCTAssertTrue(try AlarmManager.shared.alarms.contains { $0.id == firingAlarm.id && $0.state == .alerting })
+            let navigation = AppNavigation.shared
+            navigation.selectedTab = .settings
+            _ = try await OpenPillsAppIntent(alarmID: firingAlarm.id).perform()
+            try await Task.sleep(for: .milliseconds(300))
+            let remaining = try AlarmManager.shared.alarms
+            XCTAssertFalse(remaining.contains { $0.id == firingAlarm.id && $0.state == .alerting })
+            XCTAssertTrue(remaining.contains { $0.id == futureAlarm.id && $0.state == .scheduled })
+            XCTAssertEqual(navigation.selectedTab, .today)
+        } catch {
+            failure = error
+        }
+        await scheduler.setAlarmsEnabled(false) { [] }
+        if previouslyEnabled { await scheduler.setAlarmsEnabled(true) { [] } }
+        if let failure { throw failure }
+#else
+        throw XCTSkip("Real AlarmKit smoke test is simulator-only")
+#endif
+    }
+
     func testExistingAlarmKitPreferenceIsPreserved() {
         let fixture = makeFixture(legacy: "alarmKit")
         XCTAssertTrue(fixture.scheduler.alarmsEnabled)
@@ -226,8 +282,7 @@ final class AlarmSchedulerTests: XCTestCase {
         return (scheduler, client, defaults, cleanup)
     }
 
-    private func makeGroup(_ name: String) -> ScheduledDoseAlarmGroup {
-        let date = Date().addingTimeInterval(600)
+    private func makeGroup(_ name: String, at date: Date = Date().addingTimeInterval(600)) -> ScheduledDoseAlarmGroup {
         let dose = GeneratedDose(
             id: UUID().uuidString, baseEventId: UUID().uuidString, workspaceId: "personal",
             isShared: false, workspaceName: "", medicationId: UUID(), medicationName: name,
@@ -252,7 +307,7 @@ private final class CleanupSpy {
 }
 
 @MainActor
-private final class FakeAlarmKitClient: AlarmKitScheduling {
+final class FakeAlarmKitClient: AlarmKitScheduling {
     var isAvailable = true
     var authorizationStatus: AlarmAuthorizationStatus = .authorized
     var authorizationRequests = 0
@@ -262,6 +317,11 @@ private final class FakeAlarmKitClient: AlarmKitScheduling {
     var records: [UUID: StoredAlarmKitInfo] = [:]
     var cancellationAttempts: [UUID] = []
     var failCancellationIDs: Set<UUID> = []
+    var alertingIDs: Set<UUID> = []
+    var stopAttempts: [UUID] = []
+    var failStop = false
+    var removeBeforeStopFailure = false
+    var failAlarmLookup = false
     var suspendNextSchedule = false
     var waitingSchedule: CheckedContinuation<Void, Never>?
 
@@ -272,7 +332,10 @@ private final class FakeAlarmKitClient: AlarmKitScheduling {
     }
 
     func alarms() throws -> [AlarmKitAlarm] {
-        records.values.map { AlarmKitAlarm(id: $0.id, scheduledDate: $0.scheduledDate) }
+        if failAlarmLookup { throw TestError.injected }
+        return records.values.map {
+            AlarmKitAlarm(id: $0.id, scheduledDate: $0.scheduledDate, isAlerting: alertingIDs.contains($0.id))
+        }
     }
 
     func schedule(_ info: StoredAlarmKitInfo) async throws {
@@ -294,6 +357,15 @@ private final class FakeAlarmKitClient: AlarmKitScheduling {
         cancellationAttempts.append(id)
         if failCancellationIDs.contains(id) { throw TestError.injected }
         records.removeValue(forKey: id)
+        alertingIDs.remove(id)
+    }
+
+    func stop(id: UUID) throws {
+        stopAttempts.append(id)
+        if removeBeforeStopFailure { records.removeValue(forKey: id) }
+        if failStop { throw TestError.injected }
+        records.removeValue(forKey: id)
+        alertingIDs.remove(id)
     }
 
     func addExisting(id: UUID) {

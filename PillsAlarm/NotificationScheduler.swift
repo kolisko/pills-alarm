@@ -143,6 +143,38 @@ final class NotificationScheduler: ObservableObject {
         return scheduledDate
     }
 
+    func stopOpenedAlarm(id rawID: String?) throws {
+        do {
+            let alarms = try alarmClient.alarms()
+            let target: AlarmKitAlarm
+            if let rawID {
+                guard let id = UUID(uuidString: rawID) else { throw AlarmSchedulingError.invalidAlarmID }
+                guard let alarm = alarms.first(where: { $0.id == id }), alarm.isAlerting else { return }
+                target = alarm
+            } else {
+                // Alarms scheduled by build 71 have no intent parameter. Never guess between multiple alarms.
+                let alerting = alarms.filter(\.isAlerting)
+                guard !alerting.isEmpty else { return }
+                guard alerting.count == 1 else { throw AlarmSchedulingError.invalidAlarmID }
+                target = alerting[0]
+            }
+
+            // Stop immediately, without waiting for cloud refresh or the scheduling queue.
+            do {
+                try alarmClient.stop(id: target.id)
+            } catch {
+                if try alarmClient.alarms().contains(where: { $0.id == target.id && $0.isAlerting }) {
+                    // Our alarms are one-shot requests, so cancelling this same ID is a safe fallback.
+                    try alarmClient.cancel(id: target.id)
+                }
+            }
+            saveAlarmKitInfo(loadAlarmKitInfo().filter { $0.id != target.id })
+        } catch {
+            lastSchedulingError = "Alarm se nepodařilo zastavit: \(error.localizedDescription)"
+            throw error
+        }
+    }
+
     func waitForPendingOperations() async {
         while let operation = pendingOperation {
             let id = operationID
@@ -331,6 +363,7 @@ protocol AlarmKitScheduling {
     func requestAuthorization() async throws -> Bool
     func alarms() throws -> [AlarmKitAlarm]
     func schedule(_ info: StoredAlarmKitInfo) async throws
+    func stop(id: UUID) throws
     func cancel(id: UUID) throws
 }
 
@@ -365,13 +398,18 @@ private final class SystemAlarmKitClient: AlarmKitScheduling {
             let date: Date?
             if case .fixed(let scheduledDate)? = alarm.schedule { date = scheduledDate }
             else { date = nil }
-            return AlarmKitAlarm(id: alarm.id, scheduledDate: date)
+            return AlarmKitAlarm(id: alarm.id, scheduledDate: date, isAlerting: alarm.state == .alerting)
         }
     }
 
     func cancel(id: UUID) throws {
         guard #available(iOS 26.0, *) else { return }
         try AlarmManager.shared.cancel(id: id)
+    }
+
+    func stop(id: UUID) throws {
+        guard #available(iOS 26.0, *) else { return }
+        try AlarmManager.shared.stop(id: id)
     }
 
     func schedule(_ info: StoredAlarmKitInfo) async throws {
@@ -398,7 +436,7 @@ private final class SystemAlarmKitClient: AlarmKitScheduling {
         )
         let configuration = AlarmManager.AlarmConfiguration.alarm(
             schedule: .fixed(info.scheduledDate), attributes: attributes,
-            secondaryIntent: OpenPillsAppIntent(),
+            secondaryIntent: OpenPillsAppIntent(alarmID: info.id),
             sound: .named(NotificationScheduler.doseAlarmSoundName)
         )
         _ = try await AlarmManager.shared.schedule(id: info.id, configuration: configuration)
@@ -409,12 +447,14 @@ private enum AlarmSchedulingError: LocalizedError {
     case alarmsDisabled
     case alarmKitUnavailable
     case alarmKitNotAuthorized
+    case invalidAlarmID
 
     var errorDescription: String? {
         switch self {
         case .alarmsDisabled: "Alarmy jsou vypnuté."
         case .alarmKitUnavailable: "AlarmKit vyžaduje iOS 26 nebo novější."
         case .alarmKitNotAuthorized: "AlarmKit není povolený v systémovém nastavení."
+        case .invalidAlarmID: "Nelze jednoznačně určit zvonící alarm."
         }
     }
 }
@@ -434,6 +474,7 @@ struct StoredAlarmKitInfo: Codable, Sendable {
 struct AlarmKitAlarm {
     var id: UUID
     var scheduledDate: Date?
+    var isAlerting = false
 }
 
 enum AlarmAuthorizationStatus {
