@@ -74,7 +74,9 @@ The sound picker offers `Pípání` (the existing default) and `Pípání a hlas
 
 Speech is generated on the device only for groups supplied by the existing scheduler. Completed CAF files in `Library/Sounds` have stable SHA-256 names derived from the spoken content, Czech voice and renderer version. Identical groups reuse the same file across dates, reminders, rescheduling and app restarts. A changed amount, medication name, form or group produces different audio. There is no extra phase preparation or change to cancellation, grouping, repeat rules, scheduling horizon or alarm count.
 
-New speech generation shares an eight-second budget per scheduling pass and stops earlier for imminent alarms. Cache hits still work after that budget expires. Missing voices, generation errors and lists that cannot fit in full use the original beep and show a warning in alarm settings and the audit. Interrupted files are discarded; medication lists are never truncated. Disabling alarms or superseding a scheduling pass cancels pending synthesis. Sound selection is stored only on the current device.
+Speech generation has no time limit: every missing recording is completed in the same scheduling pass. Missing voices, generation errors and lists that cannot fit in full use the original beep and show a warning in alarm settings and the audit. Interrupted files are discarded; medication lists are never truncated. Disabling alarms or superseding a scheduling pass cancels pending synthesis. Sound selection is stored only on the current device.
+
+The top activity line remains visible through iCloud synchronization, speech generation and AlarmKit scheduling. Startup waits for both cloud data and the final alarm pass. Cloud refresh completion callbacks also wait for pending alarm work, including any replacement pass triggered by newer data. Alarm cancellation, aggregation and recreation rules remain unchanged.
 
 ## Build And Test
 

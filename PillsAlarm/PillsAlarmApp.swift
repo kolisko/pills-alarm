@@ -31,6 +31,20 @@ final class CloudSyncCoordinator: ObservableObject {
     private var needsReload = false
     private var needsFullRecovery = false
     private var completions: [() -> Void] = []
+    private let reloadStore: @MainActor (MedicationStore, Bool, Bool) async -> Void
+    private let waitForAlarms: @MainActor () async -> Void
+
+    init(
+        reloadStore: @escaping @MainActor (MedicationStore, Bool, Bool) async -> Void = { store, showIndicator, fullRecovery in
+            await store.reload(showSyncIndicator: showIndicator, forceFullRecovery: fullRecovery)
+        },
+        waitForAlarms: @escaping @MainActor () async -> Void = {
+            await NotificationScheduler.shared.waitForPendingOperations()
+        }
+    ) {
+        self.reloadStore = reloadStore
+        self.waitForAlarms = waitForAlarms
+    }
 
     func scheduleReload(
         store: MedicationStore,
@@ -45,6 +59,8 @@ final class CloudSyncCoordinator: ObservableObject {
 
         needsReload = true
         needsFullRecovery = needsFullRecovery || forceFullRecovery
+        // The active reload loop will consume this request; don't cancel it or enqueue it twice.
+        guard !isReloading else { return }
         pendingReloadTask?.cancel()
         pendingReloadTask = Task { [weak self, weak store] in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
@@ -90,9 +106,14 @@ final class CloudSyncCoordinator: ObservableObject {
             needsReload = false
             let forceFullRecovery = needsFullRecovery
             needsFullRecovery = false
-            await store.reload(showSyncIndicator: showSyncIndicator, forceFullRecovery: forceFullRecovery)
+            await reloadStore(store, showSyncIndicator, forceFullRecovery)
         } while needsReload
         isReloading = false
+
+        // The cloud request is complete only after the latest alarm pass has finished too.
+        // Release the cloud reload gate first so a newer update can replace stale alarm work.
+        await waitForAlarms()
+        guard !isReloading, !needsReload else { return }
 
         let pendingCompletions = completions
         completions = []
@@ -131,6 +152,10 @@ struct PillsAlarmApp: App {
                         await CloudKitIntegrationRunner.runAndWriteReport()
                         return
                     }
+                    // The benchmark owns AlarmKit fixtures; startup must not reschedule over them.
+                    if ProcessInfo.processInfo.environment["PILLCARE_ALARM_BENCHMARK"] == "1" {
+                        return
+                    }
 #endif
 #endif
 
@@ -149,6 +174,11 @@ struct PillsAlarmApp: App {
                     }
                 }
                 .onChange(of: scenePhase) {
+#if DEBUG
+#if targetEnvironment(simulator)
+                    if ProcessInfo.processInfo.environment["PILLCARE_ALARM_BENCHMARK"] == "1" { return }
+#endif
+#endif
                     if scenePhase == .active {
                         NotificationScheduler.shared.restoreAlarmState()
                         cloudSync.startPeriodicReload(store: store, intervalMinutes: autoRefreshIntervalMinutes)

@@ -20,6 +20,7 @@ final class NotificationScheduler: ObservableObject {
     @Published private(set) var lastSchedulingDate: Date?
     @Published private(set) var lastSchedulingError: String?
     @Published private(set) var lastSoundWarning: String?
+    @Published private(set) var isScheduling = false
     @Published var soundMode: AlarmSoundMode {
         didSet { defaults.set(soundMode.rawValue, forKey: Self.soundModeKey) }
     }
@@ -225,10 +226,14 @@ final class NotificationScheduler: ObservableObject {
         if cancelPrevious { previous?.cancel() }
         let id = UUID()
         operationID = id
+        isScheduling = true
 
         // Cancellation alone cannot stop an AlarmKit call already awaiting its reply.
         // Drain the previous operation before starting replacements or cancelling all alarms.
         let task = Task { @MainActor in
+            defer {
+                if self.operationID == id { self.isScheduling = false }
+            }
             _ = await previous?.result
             try Task.checkCancellation()
             do {
@@ -295,8 +300,6 @@ final class NotificationScheduler: ObservableObject {
 
     private func scheduleAlarmKitAlarms(_ alarmGroups: [ScheduledDoseAlarmGroup]) async throws -> Int {
         lastSoundWarning = nil
-        // One shared generation budget for this pass; cache hits remain usable after it expires.
-        let soundDeadline = ContinuousClock.now.advanced(by: .seconds(8))
         let alarms = try alarmClient.alarms()
         try cancelAlarms(alarms.filter { $0.id != Self.alarmKitTestID })
         let preservedTestInfo = loadAlarmKitInfo().filter { info in
@@ -308,10 +311,7 @@ final class NotificationScheduler: ObservableObject {
             for group in alarmGroups {
                 try checkSchedulingAllowed()
                 let content = Self.content(for: group)
-                let latestSoundTime = ContinuousClock.now.advanced(by: .seconds(max(0, group.scheduledDate.timeIntervalSinceNow - 1)))
-                let soundName = try await soundName(
-                    for: AlarmSpeechContent(group: group), deadline: min(soundDeadline, latestSoundTime)
-                )
+                let soundName = try await soundName(for: AlarmSpeechContent(group: group))
                 try checkSchedulingAllowed()
                 let info = StoredAlarmKitInfo(
                     id: UUID(), title: content.title, body: content.body, scheduledDate: group.scheduledDate,
@@ -337,7 +337,7 @@ final class NotificationScheduler: ObservableObject {
         try cancelAlarms(existing)
         var storedInfo = loadAlarmKitInfo().filter { $0.id != Self.alarmKitTestID }
         saveAlarmKitInfo(storedInfo)
-        let soundName = try await soundName(for: .test, deadline: .now.advanced(by: .seconds(8)))
+        let soundName = try await soundName(for: .test)
         try checkSchedulingAllowed()
         let info = StoredAlarmKitInfo(
             id: Self.alarmKitTestID, title: "Test alarmu Pill Care",
@@ -355,10 +355,10 @@ final class NotificationScheduler: ObservableObject {
         saveAlarmKitInfo(storedInfo)
     }
 
-    private func soundName(for content: @autoclosure () -> AlarmSpeechContent, deadline: ContinuousClock.Instant) async throws -> String {
+    private func soundName(for content: @autoclosure () -> AlarmSpeechContent) async throws -> String {
         guard soundMode == .spoken else { return Self.doseAlarmSoundName }
         do {
-            return try await alarmSounds.soundName(for: content(), deadline: deadline)
+            return try await alarmSounds.soundName(for: content())
         } catch is CancellationError {
             throw CancellationError()
         } catch {

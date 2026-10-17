@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B10000000000000000000008 /* CloudSyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000009 /* CloudSyncCoordinatorTests.swift */; };
 		A10000000000000000000034 /* AlarmAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000037 /* AlarmAudio.swift */; };
 		B10000000000000000000007 /* AlarmAudioTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000008 /* AlarmAudioTests.swift */; };
 		A10000000000000000000001 /* PillsAlarmApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PillsAlarmApp.swift */; };
@@ -51,6 +52,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		B20000000000000000000009 /* CloudSyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000037 /* AlarmAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmAudio.swift; sourceTree = "<group>"; };
 		B20000000000000000000008 /* AlarmAudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmAudioTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* PillsAlarmApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillsAlarmApp.swift; sourceTree = "<group>"; };
@@ -173,6 +175,7 @@
 				B20000000000000000000006 /* AlarmSchedulerTests.swift */,
 				B20000000000000000000007 /* AlarmNavigationTests.swift */,
 				B20000000000000000000008 /* AlarmAudioTests.swift */,
+				B20000000000000000000009 /* CloudSyncCoordinatorTests.swift */,
 			);
 			path = PillsAlarmTests;
 			sourceTree = "<group>";
@@ -308,6 +311,7 @@
 				B10000000000000000000005 /* AlarmSchedulerTests.swift in Sources */,
 				B10000000000000000000006 /* AlarmNavigationTests.swift in Sources */,
 				B10000000000000000000007 /* AlarmAudioTests.swift in Sources */,
+				B10000000000000000000008 /* CloudSyncCoordinatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

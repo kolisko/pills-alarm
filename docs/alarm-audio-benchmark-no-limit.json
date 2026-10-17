@@ -1,0 +1,59 @@
+{
+  "alarm_count": 60,
+  "fixture_seconds": 0.000486083,
+  "ios": "26.5",
+  "medications_per_alarm": 3,
+  "passes": [
+    {
+      "alarms": 60,
+      "audio_seconds": 4.883550079999999,
+      "cache_hits": 0,
+      "generated_files": 60,
+      "pass": "cold",
+      "tone_fallbacks": 0,
+      "total_seconds": 5.150001417
+    },
+    {
+      "alarms": 60,
+      "audio_seconds": 0.010399085999999991,
+      "cache_hits": 60,
+      "generated_files": 0,
+      "pass": "reuse_1",
+      "tone_fallbacks": 0,
+      "total_seconds": 0.1958705
+    },
+    {
+      "alarms": 60,
+      "audio_seconds": 0.010374999999999997,
+      "cache_hits": 60,
+      "generated_files": 0,
+      "pass": "reuse_2",
+      "tone_fallbacks": 0,
+      "total_seconds": 0.197292042
+    },
+    {
+      "alarms": 60,
+      "audio_seconds": 0.009887876,
+      "cache_hits": 60,
+      "generated_files": 0,
+      "pass": "reuse_3",
+      "tone_fallbacks": 0,
+      "total_seconds": 0.190256
+    },
+    {
+      "alarms": 60,
+      "audio_seconds": 0,
+      "cache_hits": 0,
+      "generated_files": 0,
+      "pass": "tone_baseline",
+      "tone_fallbacks": 0,
+      "total_seconds": 0.149359
+    }
+  ],
+  "simulator": "iPhone18,1",
+  "unique_audio_contents": 60,
+  "voice": "com.apple.voice.super-compact.cs-CZ.Zuzana",
+  "measured_on": "2026-10-17",
+  "generation_time_limit_seconds": null,
+  "scope": "Synthetic fixture, real AlarmKit, app audio cache cleared; startup/cloud rescheduling disabled in benchmark mode. OS speech services may be warm."
+}

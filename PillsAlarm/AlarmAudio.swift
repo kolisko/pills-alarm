@@ -78,13 +78,13 @@ private extension String {
 
 @MainActor
 protocol AlarmSoundProviding {
-    func soundName(for content: AlarmSpeechContent, deadline: ContinuousClock.Instant) async throws -> String
+    func soundName(for content: AlarmSpeechContent) async throws -> String
 }
 
 @MainActor
 protocol AlarmSpeechRendering {
     var voiceIdentifier: String? { get }
-    func render(_ content: AlarmSpeechContent, to url: URL, deadline: ContinuousClock.Instant) async throws
+    func render(_ content: AlarmSpeechContent, to url: URL) async throws
 }
 
 @MainActor
@@ -98,20 +98,18 @@ final class AlarmAudioCache: AlarmSoundProviding {
         self.renderer = renderer ?? SystemAlarmSpeechRenderer()
     }
 
-    func soundName(for content: AlarmSpeechContent, deadline: ContinuousClock.Instant) async throws -> String {
+    func soundName(for content: AlarmSpeechContent) async throws -> String {
         try Task.checkCancellation()
         guard let voice = renderer.voiceIdentifier else { throw AlarmAudioError.voiceUnavailable }
         let name = content.fileName(voiceIdentifier: voice)
         let destination = directory.appendingPathComponent(name)
-        // Read cache hits even when the generation budget for this scheduling pass is exhausted.
         if FileManager.default.fileExists(atPath: destination.path),
            let file = try? AVAudioFile(forReading: destination), file.length > 0 { return name }
-        guard ContinuousClock.now < deadline else { throw AlarmAudioError.timedOut }
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let temporary = directory.appendingPathComponent("\(UUID().uuidString).caf")
         defer { try? FileManager.default.removeItem(at: temporary) }
-        try await renderer.render(content, to: temporary, deadline: deadline)
+        try await renderer.render(content, to: temporary)
         try Task.checkCancellation()
         let file = try AVAudioFile(forReading: temporary)
         guard file.length > 0 else { throw AlarmAudioError.emptySpeech }
@@ -130,12 +128,11 @@ final class AlarmAudioCache: AlarmSoundProviding {
 }
 
 enum AlarmAudioError: LocalizedError {
-    case voiceUnavailable, timedOut, emptySpeech, invalidAudio, tooLong
+    case voiceUnavailable, emptySpeech, invalidAudio, tooLong
 
     var errorDescription: String? {
         switch self {
         case .voiceUnavailable: "Český hlas není na zařízení dostupný."
-        case .timedOut: "Příprava hlasu překročila časový limit."
         case .emptySpeech: "Nepodařilo se vytvořit hlasové hlášení."
         case .invalidAudio: "Zvuk hlasového alarmu se nepodařilo zpracovat."
         case .tooLong: "Celé hlasové hlášení se nevejde do zvuku alarmu."
@@ -149,14 +146,13 @@ final class SystemAlarmSpeechRenderer: AlarmSpeechRendering {
     private lazy var voice = AVSpeechSynthesisVoice(language: "cs-CZ")
     var voiceIdentifier: String? { voice?.identifier }
 
-    func render(_ content: AlarmSpeechContent, to url: URL, deadline: ContinuousClock.Instant) async throws {
+    func render(_ content: AlarmSpeechContent, to url: URL) async throws {
         guard let voice else { throw AlarmAudioError.voiceUnavailable }
         guard !content.lines.isEmpty else { throw AlarmAudioError.emptySpeech }
         var recordings: [AlarmSpeechSamples] = []
         for line in content.lines {
             try Task.checkCancellation()
-            guard ContinuousClock.now < deadline else { throw AlarmAudioError.timedOut }
-            recordings.append(try await synthesize(line, voice: voice, deadline: deadline))
+            recordings.append(try await synthesize(line, voice: voice))
         }
         guard let beepURL = Bundle.main.url(forResource: "DoseAlarm", withExtension: "wav") else {
             throw AlarmAudioError.invalidAudio
@@ -165,7 +161,7 @@ final class SystemAlarmSpeechRenderer: AlarmSpeechRendering {
     }
 
     private func synthesize(
-        _ text: String, voice: AVSpeechSynthesisVoice, deadline: ContinuousClock.Instant
+        _ text: String, voice: AVSpeechSynthesisVoice
     ) async throws -> AlarmSpeechSamples {
         // Create lazily: the existing tone mode never initializes the speech engine.
         let engine: AVSpeechSynthesizer
@@ -177,14 +173,6 @@ final class SystemAlarmSpeechRenderer: AlarmSpeechRendering {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = voice
         utterance.rate = 0.48
-        let timeout = Task { @MainActor in
-            do {
-                try await ContinuousClock().sleep(until: deadline)
-                collector.finish(.failure(AlarmAudioError.timedOut))
-                engine.stopSpeaking(at: .immediate)
-            } catch { }
-        }
-        defer { timeout.cancel() }
         return try await withTaskCancellationHandler {
             do {
                 return try await withCheckedThrowingContinuation { continuation in

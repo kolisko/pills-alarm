@@ -46,18 +46,18 @@ final class AlarmAudioTests: XCTestCase {
         XCTAssertEqual(AlarmSpeechContent(group: group([first, first])).lines.count, 2)
     }
 
-    func testCacheSurvivesRecreationAndWorksAfterGenerationBudgetExpires() async throws {
+    func testCacheSurvivesRecreationAndReusesCompletedAudio() async throws {
         let directory = temporaryDirectory()
         let renderer = StubSpeechRenderer()
         let content = AlarmSpeechContent(lines: ["Půl tablety Ospolut."])
         let cache = AlarmAudioCache(directory: directory, renderer: renderer)
-        let name = try await cache.soundName(for: content, deadline: .now.advanced(by: .seconds(1)))
+        let name = try await cache.soundName(for: content)
         let recreated = AlarmAudioCache(directory: directory, renderer: renderer)
-        let reused = try await recreated.soundName(for: content, deadline: .now.advanced(by: .seconds(-1)))
+        let reused = try await recreated.soundName(for: content)
         XCTAssertEqual(name, reused)
         XCTAssertEqual(renderer.calls, 1)
         let changed = AlarmSpeechContent(lines: ["Jedna tableta Ospolut."])
-        let changedName = try await cache.soundName(for: changed, deadline: .now.advanced(by: .seconds(1)))
+        let changedName = try await cache.soundName(for: changed)
         XCTAssertNotEqual(changedName, name)
         XCTAssertEqual(renderer.calls, 2)
     }
@@ -69,25 +69,43 @@ final class AlarmAudioTests: XCTestCase {
         let content = AlarmSpeechContent(lines: ["Test."])
         renderer.fail = true
         do {
-            _ = try await cache.soundName(for: content, deadline: .now.advanced(by: .seconds(1)))
+            _ = try await cache.soundName(for: content)
             XCTFail("Expected failure")
         } catch { }
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
         renderer.fail = false
-        let name = try await cache.soundName(for: content, deadline: .now.advanced(by: .seconds(1)))
+        let name = try await cache.soundName(for: content)
         try Data("incomplete".utf8).write(to: directory.appendingPathComponent(name))
-        _ = try await cache.soundName(for: content, deadline: .now.advanced(by: .seconds(1)))
+        _ = try await cache.soundName(for: content)
         XCTAssertEqual(renderer.calls, 3)
     }
 
-    func testExpiredBudgetDoesNotStartSynthesis() async throws {
+    func testSpeechCanFinishAfterFormerEightSecondLimit() async throws {
         let renderer = StubSpeechRenderer()
-        let cache = AlarmAudioCache(directory: temporaryDirectory(), renderer: renderer)
+        renderer.delay = .seconds(8.1)
+        let directory = temporaryDirectory()
+        let cache = AlarmAudioCache(directory: directory, renderer: renderer)
+        let name = try await cache.soundName(for: .test)
+        XCTAssertEqual(renderer.calls, 1)
+        XCTAssertGreaterThan(try AVAudioFile(forReading: directory.appendingPathComponent(name)).length, 0)
+    }
+
+    func testCancellingSpeechDiscardsIncompleteAudioAndAllowsRetry() async throws {
+        let renderer = StubSpeechRenderer()
+        renderer.delay = .seconds(30)
+        let directory = temporaryDirectory()
+        let cache = AlarmAudioCache(directory: directory, renderer: renderer)
+        let task = Task { try await cache.soundName(for: .test) }
+        while renderer.calls == 0 { await Task.yield() }
+        task.cancel()
         do {
-            _ = try await cache.soundName(for: .test, deadline: .now.advanced(by: .seconds(-1)))
-            XCTFail("Expected timeout")
-        } catch { XCTAssertEqual(error.localizedDescription, AlarmAudioError.timedOut.localizedDescription) }
-        XCTAssertEqual(renderer.calls, 0)
+            _ = try await task.value
+            XCTFail("Cancelled speech must not become reusable")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+        renderer.delay = nil
+        _ = try await cache.soundName(for: .test)
+        XCTAssertEqual(renderer.calls, 2)
     }
 
     func testComposedAudioStartsWithOriginalBeepAndSeparatesEveryMedicationWithSilence() throws {
@@ -134,11 +152,11 @@ final class AlarmAudioTests: XCTestCase {
         let content = AlarmSpeechContent(lines: ["Půl tablety Ospolutu.", "Jedna tableta Trelema."])
         let directory = temporaryDirectory()
         let cache = AlarmAudioCache(directory: directory, renderer: renderer)
-        let name = try await cache.soundName(for: content, deadline: .now.advanced(by: .seconds(8)))
+        let name = try await cache.soundName(for: content)
         let url = directory.appendingPathComponent(name)
         let file = try AVAudioFile(forReading: url)
         XCTAssertGreaterThan(file.length, 0)
-        let reused = try await cache.soundName(for: content, deadline: .now.advanced(by: .seconds(-1)))
+        let reused = try await cache.soundName(for: content)
         XCTAssertEqual(name, reused)
         let attachment = XCTAttachment(contentsOfFile: url)
         attachment.name = "Czech spoken alarm"
@@ -174,9 +192,11 @@ private final class StubSpeechRenderer: AlarmSpeechRendering {
     var voiceIdentifier: String? = "test-czech-voice"
     var calls = 0
     var fail = false
+    var delay: Duration?
 
-    func render(_ content: AlarmSpeechContent, to url: URL, deadline: ContinuousClock.Instant) async throws {
+    func render(_ content: AlarmSpeechContent, to url: URL) async throws {
         calls += 1
+        if let delay { try await Task.sleep(for: delay) }
         if fail {
             try Data("partial render".utf8).write(to: url)
             throw AlarmAudioError.emptySpeech
@@ -198,6 +218,7 @@ final class AlarmSchedulingBenchmarkTests: XCTestCase {
             throw XCTSkip("Opt-in timing benchmark; needs AlarmKit permission in an isolated simulator")
         }
         guard #available(iOS 26.0, *) else { throw XCTSkip("AlarmKit requires iOS 26") }
+        await NotificationScheduler.shared.waitForPendingOperations()
         guard try AlarmManager.shared.alarms.isEmpty else { throw XCTSkip("Existing alarms must be preserved") }
 
         let suite = "AlarmBenchmark.\(UUID().uuidString)"
@@ -237,6 +258,10 @@ final class AlarmSchedulingBenchmarkTests: XCTestCase {
                 let elapsed = start.duration(to: .now).secondsValue
                 let actualCount = try AlarmManager.shared.alarms.count
                 XCTAssertEqual(actualCount, 60)
+                if label != "tone_baseline" {
+                    XCTAssertEqual(measured.failures, 0, "Every alarm must receive speech in the same pass")
+                    if label == "cold" { XCTAssertEqual(measured.generated, names.count) }
+                }
                 rows.append([
                     "pass": label, "alarms": actualCount, "total_seconds": elapsed,
                     "audio_seconds": measured.seconds, "cache_hits": measured.hits,
@@ -309,13 +334,13 @@ private final class MeasuredAlarmSounds: AlarmSoundProviding {
 
     func reset() { seconds = 0; hits = 0; generated = 0; failures = 0 }
 
-    func soundName(for content: AlarmSpeechContent, deadline: ContinuousClock.Instant) async throws -> String {
+    func soundName(for content: AlarmSpeechContent) async throws -> String {
         let start = ContinuousClock.now
         defer { seconds += start.duration(to: .now).secondsValue }
         let name = content.fileName(voiceIdentifier: renderer.voiceIdentifier ?? "unavailable")
         let existed = FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path)
         do {
-            let result = try await cache.soundName(for: content, deadline: deadline)
+            let result = try await cache.soundName(for: content)
             if existed { hits += 1 } else { generated += 1 }
             return result
         } catch {

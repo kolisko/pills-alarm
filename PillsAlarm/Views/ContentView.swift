@@ -198,10 +198,13 @@ private extension AppTab {
 
 private struct SyncOverlay: View {
     @EnvironmentObject private var store: MedicationStore
+    @ObservedObject private var scheduler = NotificationScheduler.shared
+
+    private var isBusy: Bool { store.isSyncing || scheduler.isScheduling }
 
     var body: some View {
         VStack(spacing: 8) {
-            if store.isSyncing {
+            if isBusy {
                 SyncLine()
                     .allowsHitTesting(false)
                     .transition(.opacity)
@@ -224,7 +227,7 @@ private struct SyncOverlay: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .animation(.easeInOut(duration: 0.18), value: store.isSyncing)
+        .animation(.easeInOut(duration: 0.18), value: isBusy)
         .animation(.easeInOut(duration: 0.18), value: store.syncErrorMessage)
     }
 }

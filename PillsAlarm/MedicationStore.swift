@@ -116,9 +116,12 @@ final class MedicationStore: ObservableObject {
     }
 
     func start() async {
+        beginSync()
+        defer { endSync() }
         await reload()
         await NotificationScheduler.shared.requestAuthorizationIfNeeded()
         NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
+        await NotificationScheduler.shared.waitForPendingOperations()
     }
 
     func reload(showSyncIndicator: Bool = true, forceFullRecovery: Bool = false) async {

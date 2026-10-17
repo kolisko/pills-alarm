@@ -1,5 +1,6 @@
 import XCTest
 import AlarmKit
+import Combine
 import PillCore
 @testable import PillsAlarm
 
@@ -234,6 +235,49 @@ final class AlarmSchedulerTests: XCTestCase {
         XCTAssertEqual(audit.map(\.title), ["Morning: New"])
     }
 
+    func testSchedulingIndicatorCoversQueuedWorkAndFinishesAfterLastAlarm() async throws {
+        let fixture = makeFixture(enabled: true)
+        XCTAssertFalse(fixture.scheduler.isScheduling)
+        fixture.client.suspendNextSchedule = true
+        let planning = fixture.scheduler.rescheduleAlarmGroups([makeGroup("Morning")])
+        XCTAssertTrue(fixture.scheduler.isScheduling, "Must publish before the queued task starts")
+        await waitUntil { fixture.client.waitingSchedule != nil }
+        XCTAssertTrue(fixture.scheduler.isScheduling)
+        fixture.client.resumeSchedule()
+        try await planning.value
+        XCTAssertFalse(fixture.scheduler.isScheduling)
+    }
+
+    func testSchedulingIndicatorStaysVisibleWhileCancelledWorkIsReplaced() async throws {
+        let fixture = makeFixture(enabled: true)
+        var states: [Bool] = []
+        let observation = fixture.scheduler.$isScheduling.sink { states.append($0) }
+        defer { observation.cancel() }
+        fixture.client.suspendNextSchedule = true
+        let old = fixture.scheduler.rescheduleAlarmGroups([makeGroup("Old")])
+        await waitUntil { fixture.client.waitingSchedule != nil }
+        fixture.client.suspendNextSchedule = true
+        let replacement = fixture.scheduler.rescheduleAlarmGroups([makeGroup("New")])
+        fixture.client.resumeSchedule()
+        _ = await old.result
+        await waitUntil { fixture.client.waitingSchedule != nil }
+        XCTAssertTrue(fixture.scheduler.isScheduling)
+        fixture.client.resumeSchedule()
+        try await replacement.value
+        XCTAssertFalse(fixture.scheduler.isScheduling)
+        XCTAssertEqual(states.first, false)
+        XCTAssertEqual(states.last, false)
+        XCTAssertTrue(states.dropFirst().dropLast().allSatisfy { $0 }, "No idle gap before the replacement finishes")
+    }
+
+    func testSchedulingFailureClearsBusyStateAndKeepsErrorVisible() async {
+        let fixture = makeFixture(enabled: true)
+        fixture.client.failScheduleAttempt = 1
+        _ = await fixture.scheduler.rescheduleAlarmGroups([makeGroup("Failure")]).result
+        XCTAssertFalse(fixture.scheduler.isScheduling)
+        XCTAssertNotNil(fixture.scheduler.lastSchedulingError)
+    }
+
     func testCancellationFailureAttemptsEveryAlarmAndRetriesOnReturn() async {
         let fixture = makeFixture(enabled: true)
         let failedID = UUID()
@@ -333,12 +377,14 @@ final class AlarmSchedulerTests: XCTestCase {
         fixture.sounds.suspend = true
         let planning = fixture.scheduler.rescheduleAlarmGroups([makeGroup("One")])
         await waitUntil { !fixture.sounds.contents.isEmpty }
+        XCTAssertTrue(fixture.scheduler.isScheduling, "Speech generation is part of alarm activity")
         await fixture.scheduler.setAlarmsEnabled(false) { [] }
         _ = await planning.result
         XCTAssertEqual(fixture.client.scheduleAttempts, 0)
         XCTAssertTrue(fixture.client.records.isEmpty)
         XCTAssertNil(fixture.scheduler.lastSoundWarning)
         XCTAssertNil(fixture.scheduler.lastSchedulingError)
+        XCTAssertFalse(fixture.scheduler.isScheduling)
     }
 
     func testTestAlarmUsesSelectedVoiceWithoutSpeakingAnInventedDose() async throws {
@@ -395,7 +441,7 @@ private final class FakeAlarmSounds: AlarmSoundProviding {
     var fail = false
     var suspend = false
 
-    func soundName(for content: AlarmSpeechContent, deadline: ContinuousClock.Instant) async throws -> String {
+    func soundName(for content: AlarmSpeechContent) async throws -> String {
         contents.append(content)
         if suspend { try await Task.sleep(for: .seconds(30)) }
         if fail { throw AlarmAudioError.emptySpeech }

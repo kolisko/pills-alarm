@@ -44,7 +44,8 @@ Test `AlarmSchedulerTests.testOpenIntentStopsRealAlarmKitAlarm` je ručně spou�
 5. Nahrávky se vytvářejí pouze pro skupiny předané stávajícím plánovačem. Žádné další budoucí fáze se předem nepřipravují.
 6. Nastavení zvuku přežije restart a platí jen pro toto zařízení. Přepnutí při vypnutých alarmech je nezapne.
 7. Test za jednu minutu použije vybraný zvuk. V hlasovém režimu přečte testovací zprávu bez fiktivního pokynu k užití léků.
-8. Chybějící český hlas, vypršení limitu generování, chyba syntézy nebo příliš dlouhý seznam znamenají původní pípání a viditelné upozornění. Žádný lék se kvůli délce hlášení nevynechá ani neusekne. Nedokončený soubor se znovu nepoužije.
+8. Generování hlasu nemá časový limit a všechny chybějící nahrávky se dokončí ve stejném průchodu. Chybějící český hlas, chyba syntézy nebo příliš dlouhý seznam znamenají původní pípání a viditelné upozornění. Žádný lék se kvůli délce hlášení nevynechá ani neusekne. Nedokončený soubor se znovu nepoužije.
+9. Horní pohyblivá linka běží při načítání z iCloudu i při přípravě hlasu a nastavení alarmů. Zmizí až po dokončení obou kroků. Nahrazení rozpracovaného přeplánování novějším linku předčasně neschová; chyba plánování linku ukončí a zůstane viditelná v auditu.
 
 Test `AlarmAudioTests.testRealCzechSpeechRender` lze spustit s `PILLCARE_SPEECH_SMOKE_TEST=1` v testovacím procesu pro ověření skutečné české syntézy. Na fyzickém iPhonu je nutné poslechem ověřit vlastní zvuk při zamčené obrazovce a ukončené aplikaci, srozumitelnost názvů, zlomků a mililitrů i úplnost delších seznamů.
 
@@ -55,7 +56,9 @@ Sada má 60 alarmů, každý se třemi léky. Výchozí varianta obsahuje šest 
 
 Celkový čas zahrnuje současné rušení a vytváření alarmů i přípravu jejich zvuku. Nezahrnuje spuštění testovací aplikace, dialog oprávnění ani vytvoření testovací sady. Na konci se testovací alarmy a jejich nahrávky odstraní. Jde o syntetickou zátěž; výsledky ze simulátoru nejsou měřením na fyzickém iPhonu ani nad osobními plány uživatele.
 
-Měření 17. 10. 2026 v simulátoru iPhone 17 Pro / iOS 26.5 (Xcode 27.1), vždy 60 skutečně nastavených alarmů:
+Aktuální měření bez limitu ze 17. 10. 2026: 60 různých hlášek pro 60 skutečných alarmů se vytvořilo napoprvé za 5,150 s, všechny s hlasem. Následující kompletní přeplánování s hotovými soubory trvala 0,196 / 0,197 / 0,190 s. Pípání pro srovnání trvalo 0,149 s. Měření vyprázdnilo aplikační cache audia; systémové služby syntézy už mohly být zahřáté. Měřicí režim potlačuje automatické spouštěcí a foreground přeplánování, aby nerušilo jeho vlastní alarmy. Úplné hodnoty jsou v [JSON výsledcích bez limitu](../docs/alarm-audio-benchmark-no-limit.json).
+
+Původní měření 17. 10. 2026 ještě s osmivteřinovým limitem, který byl následně odstraněn: simulátor iPhone 17 Pro / iOS 26.5 (Xcode 27.1), vždy 60 skutečně nastavených alarmů:
 
 | Různých hlášek | Průchod | Celkem | Nové soubory | Použití cache | Náhradní pípání |
 | --- | --- | --- | --- | --- | --- |
@@ -68,7 +71,7 @@ Měření 17. 10. 2026 v simulátoru iPhone 17 Pro / iOS 26.5 (Xcode 27.1), vžd
 | 60 | Další 2 | 1,821 s | 4 | 56 | 0 |
 | 60 | Další 3 | 0,415 s | 0 | 60 | 0 |
 
-Samotná audio část při šesti nových hláškách trvala 1,804 s; použití 60 hotových souborů trvalo 11–22 ms. Srovnávací přeplánování se samotným pípáním trvalo 0,161 s a 0,391 s v jednotlivých bězích. Zátěžová varianta ukazuje, že časový limit může při prvním průchodu ponechat část alarmů s pípáním; kompletní hlasové pokrytí se doplnilo dalšími přeplánováními. Úplné hodnoty jsou v [JSON výsledcích](../docs/alarm-audio-benchmark.json).
+Samotná audio část při šesti nových hláškách trvala 1,804 s; použití 60 hotových souborů trvalo 11–22 ms. Srovnávací přeplánování se samotným pípáním trvalo 0,161 s a 0,391 s v jednotlivých bězích. Tyto historické výsledky zachycují i náhradní pípání způsobené tehdejším limitem a nereprezentují aktuální chování bez limitu. Úplné hodnoty jsou v [JSON výsledcích](../docs/alarm-audio-benchmark.json).
 
 ## Chybové stavy
 - Pokud uživatel nastaví hodnotu mimo povolený rozsah, aplikace ji omezí na platnou mez.
