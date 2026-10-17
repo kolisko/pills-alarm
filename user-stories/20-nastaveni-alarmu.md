@@ -36,14 +36,16 @@ Akce dostává ID konkrétního alarmu. Opakované otevření již skončeného 
 
 Test `AlarmSchedulerTests.testOpenIntentStopsRealAlarmKitAlarm` je ručně spouštěný integrační test pro izolovaný simulátor bez existujících alarmů. Aktivuje se proměnnou testovacího procesu `PILLCARE_REAL_ALARMKIT_TEST=1`; jinak se přeskočí. Ověřuje skutečný stav `alerting`, zastavení přes produkční App Intent a zachování budoucího alarmu. Nenahrazuje kontrolu klepnutí ze zamčené obrazovky fyzického telefonu.
 
+Test `AlarmSchedulerTests.testActualBannerTapStopsRealAlarmKitAlarm` používá `PILLCARE_REAL_BANNER_TEST=1` a izolaci od cloudového přeplánování pomocí `PILLCARE_ALARM_BENCHMARK=1`. Sám akci pro otevření nevolá. Po naplánování alarmu za 20 sekund je nutné v UI simulátoru přesunout aplikaci do pozadí a klepnout na skutečný systémový banner. Test ověří návrat do aplikace, zastavení konkrétního alarmu, zachování budoucího alarmu a přechod na `Dnes`; přiloží JSON se skutečným výsledkem. Součástí ruční kontroly je také snímek obrazovky ověřující zmizení banneru. Bez výslovného zapnutí se test přeskočí.
+
 ## Pípání a hlas
 1. Výchozí zvuk je `Pípání`. Uživatel v sekci `Zvuk` zvolí `Pípání a hlas`.
 2. Aplikace zachová současné rušení a opětovné vytváření všech alarmů, jejich agregaci, horizont a opakovací pravidla. Pro každou již sestavenou skupinu připraví jeden zvuk s původním pípáním a dávkami všech léků.
-3. Například pro půl tablety Ospolutu a jednu tabletu Trelemy ve stejný čas zazní pípání, množství a název prvního léku, krátká pauza a množství a název druhého léku. Celý seznam se podle dostupné délky zvuku opakuje s pípáním mezi opakováními.
+3. Například pro půl tablety Ospolutu a jednu tabletu Trelemy ve stejný čas zazní celá trojice původních pípnutí, množství a název prvního léku, krátká pauza a množství a název druhého léku. Celý seznam se podle dostupné délky zvuku opakuje s pípáním mezi opakováními. Zbytek nahrávky doplní pouze celé trojice s pauzami a případné ticho, žádný tón se uprostřed neusekne.
 4. Při dalším přeplánování se použijí již dokončené nahrávky se stejným obsahem a hlasem. Změna množství nebo složení skupiny vybere jiný soubor. Potvrzený nebo přeskočený lék se řídí stávajícími pravidly a při dalším přeplánování se nečte.
 5. Nahrávky se vytvářejí pouze pro skupiny předané stávajícím plánovačem. Žádné další budoucí fáze se předem nepřipravují.
 6. Nastavení zvuku přežije restart a platí jen pro toto zařízení. Přepnutí při vypnutých alarmech je nezapne.
-7. Test za jednu minutu použije vybraný zvuk. V hlasovém režimu přečte testovací zprávu bez fiktivního pokynu k užití léků.
+7. Test použije vybraný zvuk a nejbližší skutečnou skupinu z běžného plánovače včetně všech nepotvrzených dávek podle příslušné fáze. V hlasovém režimu se text sestaví stejným postupem jako u běžného alarmu a využije stejnou cache. Alarm zazní minutu po přípravě zvuku. Bez dostupných podání se zobrazí zpráva.
 8. Generování hlasu nemá časový limit a všechny chybějící nahrávky se dokončí ve stejném průchodu. Chybějící český hlas, chyba syntézy nebo příliš dlouhý seznam znamenají původní pípání a viditelné upozornění. Žádný lék se kvůli délce hlášení nevynechá ani neusekne. Nedokončený soubor se znovu nepoužije.
 9. Horní pohyblivá linka běží při načítání z iCloudu i při přípravě hlasu a nastavení alarmů. Zmizí až po dokončení obou kroků. Nahrazení rozpracovaného přeplánování novějším linku předčasně neschová; chyba plánování linku ukončí a zůstane viditelná v auditu.
 

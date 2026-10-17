@@ -46,6 +46,16 @@ final class AlarmAudioTests: XCTestCase {
         XCTAssertEqual(AlarmSpeechContent(group: group([first, first])).lines.count, 2)
     }
 
+    func testFractionSpeechUsesExactCzechWordsForBothFractionNotations() {
+        for (amount, expected) in [
+            ("1/2", "Půl tablety Ospolut."), ("½", "Půl tablety Ospolut."),
+            ("3/4", "Tři čtvrtě tablety Ospolut."), ("¾", "Tři čtvrtě tablety Ospolut."),
+            ("1/4", "Čtvrt tablety Ospolut."), ("¼", "Čtvrt tablety Ospolut.")
+        ] {
+            XCTAssertEqual(AlarmSpeechContent(group: group([dose("Ospolut", amount: amount)])).lines, [expected])
+        }
+    }
+
     func testCacheSurvivesRecreationAndReusesCompletedAudio() async throws {
         let directory = temporaryDirectory()
         let renderer = StubSpeechRenderer()
@@ -121,17 +131,56 @@ final class AlarmAudioTests: XCTestCase {
         try file.read(into: buffer)
         let samples = buffer.floatChannelData![0]
         let beepFile = try AVAudioFile(forReading: beepURL)
-        let beep = AVAudioPCMBuffer(pcmFormat: beepFile.processingFormat, frameCapacity: 66_150)!
+        let beepFrames = Int(AlarmAudioComposer.beepSeconds * 44_100)
+        let beep = AVAudioPCMBuffer(pcmFormat: beepFile.processingFormat, frameCapacity: AVAudioFrameCount(beepFrames))!
         try beepFile.read(into: beep)
-        for index in stride(from: 0, to: 66_150, by: 101) {
+        for index in stride(from: 0, to: beepFrames, by: 101) {
             XCTAssertEqual(samples[index], beep.floatChannelData![0][index], accuracy: 0.0001)
         }
         let pause = Int(AlarmAudioComposer.pauseSeconds * 44_100)
-        let speechStart = 66_150 + pause
+        let speechStart = beepFrames + pause
         XCTAssertEqual(samples[speechStart - 100], 0, accuracy: 0.0001)
         XCTAssertEqual(samples[speechStart + 100], 0.2, accuracy: 0.0001)
         XCTAssertEqual(samples[speechStart + 4_410 + 100], 0, accuracy: 0.0001)
         XCTAssertEqual(samples[speechStart + 4_410 + pause + 300], 0.4, accuracy: 0.001)
+    }
+
+    func testBeepPhrasesFinishNaturallyAndDoNotGetTruncatedAtTheEnd() throws {
+        let beepURL = try XCTUnwrap(Bundle.main.url(forResource: "DoseAlarm", withExtension: "wav"))
+        let original = try AVAudioFile(forReading: beepURL)
+        let beepFrames = Int(AlarmAudioComposer.beepSeconds * AlarmAudioComposer.sampleRate)
+        let beep = AVAudioPCMBuffer(pcmFormat: original.processingFormat, frameCapacity: AVAudioFrameCount(beepFrames))!
+        try original.read(into: beep)
+        let beepSamples = Array(UnsafeBufferPointer(start: beep.floatChannelData![0], count: beepFrames))
+        // The entire three-beep pattern is followed by real silence from the source.
+        XCTAssertGreaterThan(beepSamples.prefix(33_000).map { abs($0) }.max()!, 0.5)
+        XCTAssertTrue(beepSamples.suffix(2_000).allSatisfy { $0 == 0 })
+
+        let pauseFrames = Int(AlarmAudioComposer.pauseSeconds * AlarmAudioComposer.sampleRate)
+        let beepPhrase = beepSamples + [Float](repeating: 0, count: pauseFrames)
+        // Exercise different remainders, including one that used to end mid-beep.
+        for speechSeconds in [0.1, 2.3, 17.4, 25.0] {
+            let speech = [Float](repeating: 0.2, count: Int(speechSeconds * AlarmAudioComposer.sampleRate))
+            let url = temporaryDirectory().appendingPathComponent("natural-beeps.caf")
+            try AlarmAudioComposer.write(
+                recordings: [AlarmSpeechSamples(values: speech, sampleRate: AlarmAudioComposer.sampleRate)],
+                beepURL: beepURL, to: url
+            )
+            let file = try AVAudioFile(forReading: url)
+            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))!
+            try file.read(into: buffer)
+            let output = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
+            let cycleFrames = beepPhrase.count + speech.count + pauseFrames
+            var offset = (output.count / cycleFrames) * cycleFrames
+            while offset + beepPhrase.count <= output.count {
+                for index in stride(from: 0, to: beepPhrase.count, by: 101) {
+                    XCTAssertEqual(output[offset + index], beepPhrase[index], accuracy: 0.0001)
+                }
+                offset += beepPhrase.count
+            }
+            XCTAssertTrue(output[offset...].allSatisfy { $0 == 0 })
+            XCTAssertTrue(output.suffix(pauseFrames).allSatisfy { $0 == 0 })
+        }
     }
 
     func testLongListFallsBackAsAWholeInsteadOfTruncatingMedicationNames() throws {
@@ -150,7 +199,10 @@ final class AlarmAudioTests: XCTestCase {
         }
         let renderer = SystemAlarmSpeechRenderer()
         XCTAssertNotNil(renderer.voiceIdentifier, "Install a Czech voice in the simulator")
-        let content = AlarmSpeechContent(lines: ["Půl tablety Ospolutu.", "Jedna tableta Trelema."])
+        let content = AlarmSpeechContent(group: group([
+            dose("Ospolut", amount: "1/2"), dose("Trelema", amount: "1")
+        ]))
+        XCTAssertEqual(content.lines, ["Půl tablety Ospolut.", "Jedna tableta Trelema."])
         let directory = temporaryDirectory()
         let cache = AlarmAudioCache(directory: directory, renderer: renderer)
         let name = try await cache.soundName(for: content)

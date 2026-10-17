@@ -31,7 +31,7 @@ struct AlarmSpeechContent: Equatable, Sendable {
 
     func fileName(voiceIdentifier: String) -> String {
         // Bump this version whenever the sound, pauses, rate or wording changes.
-        let components = ["pillcare-spoken-v1", voiceIdentifier] + lines
+        let components = ["pillcare-spoken-v2", voiceIdentifier] + lines
         let data = try! JSONEncoder().encode(components)
         let key = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         return "PillCare-\(key).caf"
@@ -254,7 +254,9 @@ private final class AlarmSpeechCollector: @unchecked Sendable {
 
 enum AlarmAudioComposer {
     static let sampleRate = 44_100.0
-    static let beepSeconds = 1.5
+    // The original sound's first three beeps finish before 0.8 s. At 1.5 s,
+    // the next group is already sounding and would be cut off mid-beep.
+    static let beepSeconds = 0.8
     static let pauseSeconds = 0.45
     static let durationSeconds = 29.5
 
@@ -267,7 +269,8 @@ enum AlarmAudioComposer {
         guard beepBuffer.frameLength > 0 else { throw AlarmAudioError.invalidAudio }
         let beep = Array(UnsafeBufferPointer(start: beepBuffer.floatChannelData![0], count: Int(beepBuffer.frameLength)))
         let pause = [Float](repeating: 0, count: Int(sampleRate * pauseSeconds))
-        var cycle = beep + pause
+        let beepPhrase = beep + pause
+        var cycle = beepPhrase
         for recording in recordings {
             cycle += try resample(recording, format: format)
             cycle += pause
@@ -277,7 +280,10 @@ enum AlarmAudioComposer {
         // Repeat complete spoken lists, separated by the original beeps. Never cut off a medication.
         var samples: [Float] = []
         while samples.count + cycle.count <= frameCount { samples += cycle }
-        while samples.count < frameCount { samples += beep.prefix(frameCount - samples.count) }
+        // Fill the remainder with complete beep phrases, including their pause.
+        // Leave the final fraction silent instead of cutting off another beep.
+        while samples.count + beepPhrase.count <= frameCount { samples += beepPhrase }
+        samples += [Float](repeating: 0, count: frameCount - samples.count)
         let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))!
         output.frameLength = AVAudioFrameCount(frameCount)
         samples.withUnsafeBufferPointer { output.floatChannelData![0].update(from: $0.baseAddress!, count: frameCount) }

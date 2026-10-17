@@ -2,10 +2,84 @@ import XCTest
 import AlarmKit
 import Combine
 import PillCore
+import UIKit
 @testable import PillsAlarm
 
 @MainActor
 final class AlarmSchedulerTests: XCTestCase {
+    func testActualBannerTapStopsRealAlarmKitAlarm() async throws {
+#if targetEnvironment(simulator)
+        guard ProcessInfo.processInfo.environment["PILLCARE_REAL_BANNER_TEST"] == "1" else {
+            throw XCTSkip("Opt-in UI interaction test; tap the actual banner in the isolated simulator")
+        }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("AlarmKit requires iOS 26") }
+        let scheduler = NotificationScheduler.shared
+        await scheduler.waitForPendingOperations()
+        guard try AlarmManager.shared.alarms.isEmpty else {
+            throw XCTSkip("Run only in a simulator without existing alarms")
+        }
+        let previouslyEnabled = scheduler.alarmsEnabled
+        await scheduler.setAlarmsEnabled(true) { [] }
+        guard scheduler.alarmsEnabled else { return XCTFail("Allow AlarmKit in the isolated simulator") }
+
+        var backgrounded = false
+        var returnedToApp = false
+        let background = NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
+            .sink { _ in backgrounded = true }
+        let foreground = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .sink { _ in if backgrounded { returnedToApp = true } }
+        defer { background.cancel(); foreground.cancel() }
+        let navigation = AppNavigation.shared
+        navigation.selectedTab = .settings
+        let originalTrigger = navigation.returnToTodayTrigger
+        var failure: Error?
+        do {
+            let firingDate = Date().addingTimeInterval(20)
+            let futureDate = Date().addingTimeInterval(600)
+            try await scheduler.rescheduleAlarmGroups([
+                makeGroup("Banner interaction test", at: firingDate),
+                makeGroup("Preserved future alarm", at: futureDate)
+            ]).value
+            let alarms = try AlarmManager.shared.alarms
+            let target = try XCTUnwrap(alarms.first {
+                if case .fixed(let date)? = $0.schedule { return abs(date.timeIntervalSince(firingDate)) < 1 }
+                return false
+            })
+            let future = try XCTUnwrap(alarms.first { $0.id != target.id })
+            print("BANNER_UI_TEST_READY: background the app, then tap the actual alarm banner")
+            let deadline = Date().addingTimeInterval(120)
+            while !returnedToApp, Date() < deadline { try await Task.sleep(for: .milliseconds(200)) }
+            XCTAssertTrue(backgrounded, "The app must actually be backgrounded through the simulator UI")
+            XCTAssertTrue(returnedToApp, "The app must actually open from a tap on the system banner")
+            try await Task.sleep(for: .seconds(1))
+            let remaining = try AlarmManager.shared.alarms
+            let stillAlerting = remaining.contains { $0.id == target.id && $0.state == .alerting }
+            let futurePreserved = remaining.contains { $0.id == future.id && $0.state == .scheduled }
+            let routedToToday = navigation.selectedTab == .today && navigation.returnToTodayTrigger != originalTrigger
+            let report = try JSONSerialization.data(withJSONObject: [
+                "backgrounded": backgrounded, "returned_to_app": returnedToApp,
+                "alarm_still_alerting": stillAlerting, "future_alarm_preserved": futurePreserved,
+                "routed_to_today": routedToToday
+            ], options: [.prettyPrinted, .sortedKeys])
+            let attachment = XCTAttachment(data: report, uniformTypeIdentifier: "public.json")
+            attachment.name = "Actual banner interaction"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            print("BANNER_UI_TEST_RESULT: \(String(decoding: report, as: UTF8.self))")
+            XCTAssertFalse(stillAlerting, "The real banner tap must stop the alarm")
+            XCTAssertTrue(futurePreserved)
+            XCTAssertTrue(routedToToday)
+            // Leave the result visible briefly for a screenshot of the system banner too.
+            try await Task.sleep(for: .seconds(10))
+        } catch { failure = error }
+        await scheduler.setAlarmsEnabled(false) { [] }
+        if previouslyEnabled { await scheduler.setAlarmsEnabled(true) { [] } }
+        if let failure { throw failure }
+#else
+        throw XCTSkip("Real banner interaction test is simulator-only")
+#endif
+    }
+
     func testOpenIntentStopsRealAlarmKitAlarm() async throws {
 #if targetEnvironment(simulator)
         guard ProcessInfo.processInfo.environment["PILLCARE_REAL_ALARMKIT_TEST"] == "1" else {
