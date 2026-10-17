@@ -29,8 +29,6 @@ struct AlarmSpeechContent: Equatable, Sendable {
 
     init(lines: [String]) { self.lines = lines }
 
-    static let test = AlarmSpeechContent(lines: ["Toto je test hlasového alarmu Pill Care."])
-
     func fileName(voiceIdentifier: String) -> String {
         // Bump this version whenever the sound, pauses, rate or wording changes.
         let components = ["pillcare-spoken-v1", voiceIdentifier] + lines

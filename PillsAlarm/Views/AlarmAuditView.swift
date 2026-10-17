@@ -275,7 +275,7 @@ private struct AlarmSettingsView: View {
             } header: {
                 Text("Test alarmu")
             } footer: {
-                Text("Běžné alarmy léků zůstanou beze změny.")
+                Text("Test použije nejbližší skupinu z plánování alarmů a skutečné dávky všech jejích léků. Běžné alarmy léků zůstanou beze změny.")
             }
 
             Section {
@@ -376,7 +376,7 @@ private struct AlarmSettingsView: View {
             defer { isSchedulingTest = false }
 
             do {
-                let scheduledDate = try await scheduler.scheduleTestAlarm()
+                let scheduledDate = try await scheduler.scheduleTestAlarm(store: store)
                 testSucceeded = true
                 testStatusMessage = "Test je naplánovaný na \(scheduledDate.formatted(date: .omitted, time: .standard))."
             } catch is CancellationError {

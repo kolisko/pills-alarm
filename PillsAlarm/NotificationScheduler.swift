@@ -142,13 +142,22 @@ final class NotificationScheduler: ObservableObject {
         }
     }
 
-    func scheduleTestAlarm() async throws -> Date {
+    func scheduleTestAlarm(store: MedicationStore) async throws -> Date {
+        try await scheduleTestAlarm { self.makeUpcomingDoseAlarmGroups(store: store) }
+    }
+
+    func scheduleTestAlarm(
+        alarmGroups: @escaping @MainActor () -> [ScheduledDoseAlarmGroup]
+    ) async throws -> Date {
         guard alarmsEnabled else { throw AlarmSchedulingError.alarmsDisabled }
         var scheduledDate = Date()
         let operation = enqueueOperation(cancelPrevious: false) {
             try self.checkSchedulingAllowed()
-            scheduledDate = Date().addingTimeInterval(60)
-            try await self.scheduleAlarmKitTest(at: scheduledDate)
+            // Read current plans after earlier scheduling work has finished.
+            guard let group = alarmGroups().first, !group.alarms.isEmpty else {
+                throw AlarmSchedulingError.noUpcomingDosesForTest
+            }
+            scheduledDate = try await self.scheduleAlarmKitTest(using: group)
         }
         try await operation.value
         return scheduledDate
@@ -331,17 +340,19 @@ final class NotificationScheduler: ObservableObject {
         return scheduledIDs.count
     }
 
-    private func scheduleAlarmKitTest(at scheduledDate: Date) async throws {
+    private func scheduleAlarmKitTest(using group: ScheduledDoseAlarmGroup) async throws -> Date {
         lastSoundWarning = nil
         let existing = try alarmClient.alarms().filter { $0.id == Self.alarmKitTestID }
         try cancelAlarms(existing)
         var storedInfo = loadAlarmKitInfo().filter { $0.id != Self.alarmKitTestID }
         saveAlarmKitInfo(storedInfo)
-        let soundName = try await soundName(for: .test)
+        let content = Self.content(for: group)
+        let soundName = try await soundName(for: AlarmSpeechContent(group: group))
         try checkSchedulingAllowed()
+        let scheduledDate = Date().addingTimeInterval(60)
         let info = StoredAlarmKitInfo(
-            id: Self.alarmKitTestID, title: "Test alarmu Pill Care",
-            body: "Pokud vidíte a slyšíte tento alarm, AlarmKit funguje.", scheduledDate: scheduledDate,
+            id: Self.alarmKitTestID, title: "Test: \(content.title)",
+            body: content.body, scheduledDate: scheduledDate,
             soundName: soundName
         )
         try await alarmClient.schedule(info)
@@ -353,6 +364,7 @@ final class NotificationScheduler: ObservableObject {
         }
         storedInfo.append(info)
         saveAlarmKitInfo(storedInfo)
+        return scheduledDate
     }
 
     private func soundName(for content: @autoclosure () -> AlarmSpeechContent) async throws -> String {
@@ -486,6 +498,7 @@ private enum AlarmSchedulingError: LocalizedError {
     case alarmKitUnavailable
     case alarmKitNotAuthorized
     case invalidAlarmID
+    case noUpcomingDosesForTest
 
     var errorDescription: String? {
         switch self {
@@ -493,6 +506,7 @@ private enum AlarmSchedulingError: LocalizedError {
         case .alarmKitUnavailable: "AlarmKit vyžaduje iOS 26 nebo novější."
         case .alarmKitNotAuthorized: "AlarmKit není povolený v systémovém nastavení."
         case .invalidAlarmID: "Nelze jednoznačně určit zvonící alarm."
+        case .noUpcomingDosesForTest: "Pro test nejsou k dispozici žádná nadcházející nepotvrzená podání."
         }
     }
 }

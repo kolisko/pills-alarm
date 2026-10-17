@@ -85,7 +85,7 @@ final class AlarmAudioTests: XCTestCase {
         renderer.delay = .seconds(8.1)
         let directory = temporaryDirectory()
         let cache = AlarmAudioCache(directory: directory, renderer: renderer)
-        let name = try await cache.soundName(for: .test)
+        let name = try await cache.soundName(for: AlarmSpeechContent(lines: ["Jedna tableta Lék."]))
         XCTAssertEqual(renderer.calls, 1)
         XCTAssertGreaterThan(try AVAudioFile(forReading: directory.appendingPathComponent(name)).length, 0)
     }
@@ -95,7 +95,8 @@ final class AlarmAudioTests: XCTestCase {
         renderer.delay = .seconds(30)
         let directory = temporaryDirectory()
         let cache = AlarmAudioCache(directory: directory, renderer: renderer)
-        let task = Task { try await cache.soundName(for: .test) }
+        let content = AlarmSpeechContent(lines: ["Jedna tableta Lék."])
+        let task = Task { try await cache.soundName(for: content) }
         while renderer.calls == 0 { await Task.yield() }
         task.cancel()
         do {
@@ -104,7 +105,7 @@ final class AlarmAudioTests: XCTestCase {
         } catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
         renderer.delay = nil
-        _ = try await cache.soundName(for: .test)
+        _ = try await cache.soundName(for: content)
         XCTAssertEqual(renderer.calls, 2)
     }
 

@@ -102,7 +102,7 @@ final class AlarmSchedulerTests: XCTestCase {
         XCTAssertEqual(fixture.client.records.count, 1)
         XCTAssertEqual(fixture.scheduler.lastScheduledCount, 1)
         let before = Date()
-        let date = try await fixture.scheduler.scheduleTestAlarm()
+        let date = try await fixture.scheduler.scheduleTestAlarm { [group] }
         XCTAssertGreaterThanOrEqual(date.timeIntervalSince(before), 60)
         XCTAssertLessThan(date.timeIntervalSince(before), 65)
         XCTAssertEqual(fixture.client.records.count, 2)
@@ -114,7 +114,7 @@ final class AlarmSchedulerTests: XCTestCase {
 
     func testReschedulingPreservesTestAlarmAndDisablingRemovesEverything() async throws {
         let fixture = makeFixture(enabled: true)
-        _ = try await fixture.scheduler.scheduleTestAlarm()
+        _ = try await fixture.scheduler.scheduleTestAlarm { [self.makeGroup("Morning")] }
         try await fixture.scheduler.rescheduleAlarmGroups([makeGroup("Morning")]).value
         XCTAssertEqual(fixture.client.records.count, 2)
         XCTAssertNotNil(fixture.client.records[NotificationScheduler.alarmKitTestID])
@@ -136,7 +136,10 @@ final class AlarmSchedulerTests: XCTestCase {
         XCTAssertFalse(fixture.scheduler.alarmsEnabled)
         XCTAssertEqual(fixture.client.scheduleAttempts, 0)
         do {
-            _ = try await fixture.scheduler.scheduleTestAlarm()
+            _ = try await fixture.scheduler.scheduleTestAlarm {
+                XCTFail("Must not read doses while alarms are disabled")
+                return []
+            }
             XCTFail("Test alarm must be rejected while off")
         } catch {
             XCTAssertEqual(error.localizedDescription, "Alarmy jsou vypnuté.")
@@ -208,7 +211,9 @@ final class AlarmSchedulerTests: XCTestCase {
     func testDisablingDuringTestSchedulingDrainsLateCompletion() async {
         let fixture = makeFixture(enabled: true)
         fixture.client.suspendNextSchedule = true
-        let testing = Task { try await fixture.scheduler.scheduleTestAlarm() }
+        let testing = Task {
+            try await fixture.scheduler.scheduleTestAlarm { [self.makeGroup("Morning")] }
+        }
         await waitUntil { fixture.client.waitingSchedule != nil }
         let disabling = Task { await fixture.scheduler.setAlarmsEnabled(false) { [] } }
         await waitUntil { !fixture.scheduler.alarmsEnabled }
@@ -387,15 +392,118 @@ final class AlarmSchedulerTests: XCTestCase {
         XCTAssertFalse(fixture.scheduler.isScheduling)
     }
 
-    func testTestAlarmUsesSelectedVoiceWithoutSpeakingAnInventedDose() async throws {
+    func testTestAlarmUsesRealPhasedDosesAndSameSoundAsNearestRegularAlarm() async throws {
         let fixture = makeFixture(enabled: true)
         fixture.scheduler.soundMode = .spoken
-        _ = try await fixture.scheduler.scheduleTestAlarm()
-        XCTAssertEqual(fixture.sounds.contents, [.test])
-        XCTAssertEqual(
-            fixture.client.records[NotificationScheduler.alarmKitTestID]?.soundName,
-            AlarmSpeechContent.test.fileName(voiceIdentifier: "test")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 10, day: 16))!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 17, hour: 7))!
+        let morning = DoseTime(label: "Ráno", time: TimeOfDay(hour: 8, minute: 0))
+        func medication(_ name: String, amount: Double, form: MedicationForm = .tablet) -> Medication {
+            Medication(
+                name: name, note: "", form: form, colorHex: "#009999", startDate: start,
+                doseTimes: [morning], phases: [
+                    PlanPhase(title: "První den", durationDays: 1, doses: [DoseEntry(timeId: morning.id, amount: 4)]),
+                    PlanPhase(title: "Aktuální dávka", durationDays: nil, doses: [DoseEntry(timeId: morning.id, amount: amount)])
+                ]
+            )
+        }
+        var medications = [
+            medication("Ospolut", amount: 0.5), medication("Trelema", amount: 1),
+            medication("Sirup", amount: 2.5, form: .syrup), medication("Vynechaný", amount: 0),
+            medication("Už podaný", amount: 3)
+        ]
+        let confirmedDose = try XCTUnwrap(ScheduleEngine.doses(on: now, medications: medications, calendar: calendar)
+            .first { $0.medicationName == "Už podaný" })
+        let confirmation = DoseConfirmation(
+            eventId: confirmedDose.id, medicationId: confirmedDose.medicationId, timeId: confirmedDose.timeId,
+            scheduledDate: confirmedDose.scheduledDate, amount: confirmedDose.amount, status: .confirmed,
+            memberId: UUID(), memberName: "", timestamp: now, note: ""
         )
+        func groups() -> [ScheduledDoseAlarmGroup] {
+            AlarmSchedulingRules.groupedByMinute(AlarmSchedulingRules.upcomingAlarms(
+                now: now, settings: fixture.scheduler.alarmSettings,
+                dosesForDate: { ScheduleEngine.doses(on: $0, medications: medications, calendar: calendar) },
+                confirmationForDose: { $0.id == confirmation.eventId ? confirmation : nil },
+                calendar: calendar
+            ), calendar: calendar)
+        }
+        let regularGroups = groups()
+        let nearest = try XCTUnwrap(regularGroups.first)
+        XCTAssertEqual(nearest.alarms.count, 3)
+        try await fixture.scheduler.rescheduleAlarmGroups(regularGroups).value
+        let regularRecords = fixture.client.records
+        let nearestRecord = try XCTUnwrap(regularRecords.values.first { $0.scheduledDate == nearest.scheduledDate })
+        let soundCalls = fixture.sounds.contents.count
+
+        _ = try await fixture.scheduler.scheduleTestAlarm { groups() }
+        let testRecord = try XCTUnwrap(fixture.client.records[NotificationScheduler.alarmKitTestID])
+        XCTAssertEqual(fixture.sounds.contents.count, soundCalls + 1, "Only the selected group is prepared for the test")
+        XCTAssertEqual(fixture.sounds.contents.last?.lines, [
+            "Půl tablety Ospolut.", "2,5 mililitru Sirup.", "Jedna tableta Trelema."
+        ])
+        XCTAssertEqual(testRecord.soundName, nearestRecord.soundName)
+        XCTAssertEqual(testRecord.title, "Test: \(nearestRecord.title)")
+        XCTAssertEqual(testRecord.body, nearestRecord.body)
+
+        medications[0].phases[1].doses[0].amount = 0.75
+        _ = try await fixture.scheduler.scheduleTestAlarm { groups() }
+        XCTAssertEqual(fixture.sounds.contents.last?.lines.first, "Tři čtvrtě tablety Ospolut.")
+        XCTAssertNotEqual(fixture.client.records[NotificationScheduler.alarmKitTestID]?.soundName, testRecord.soundName)
+        XCTAssertEqual(Set(fixture.client.records.keys), Set(regularRecords.keys).union([NotificationScheduler.alarmKitTestID]))
+        for (id, record) in regularRecords {
+            XCTAssertEqual(fixture.client.records[id]?.soundName, record.soundName)
+            XCTAssertEqual(fixture.client.records[id]?.scheduledDate, record.scheduledDate)
+            XCTAssertFalse(fixture.client.cancellationAttempts.contains(id))
+        }
+    }
+
+    func testTestAlarmReadsLatestGroupAfterPendingSchedulingFinishes() async throws {
+        let fixture = makeFixture(enabled: true)
+        fixture.scheduler.soundMode = .spoken
+        fixture.client.suspendNextSchedule = true
+        let planning = fixture.scheduler.rescheduleAlarmGroups([makeGroup("Původní")])
+        await waitUntil { fixture.client.waitingSchedule != nil }
+        var upcoming = [makeGroup("Stará dávka")]
+        var didReadPlans = false
+        var testQueued = false
+        let testing = Task {
+            testQueued = true
+            return try await fixture.scheduler.scheduleTestAlarm {
+                didReadPlans = true
+                return upcoming
+            }
+        }
+        await waitUntil { testQueued }
+        XCTAssertFalse(didReadPlans)
+        upcoming = [makeGroup("Aktuální dávka")]
+        fixture.client.resumeSchedule()
+        try await planning.value
+        _ = try await testing.value
+        XCTAssertTrue(didReadPlans)
+        XCTAssertEqual(fixture.sounds.contents.last?.lines, ["Jedna tableta Aktuální dávka."])
+    }
+
+    func testTestAlarmWithoutUpcomingDosesReportsErrorAndPreservesAlarms() async {
+        for mode in AlarmSoundMode.allCases {
+            let fixture = makeFixture(enabled: true)
+            fixture.scheduler.soundMode = mode
+            let regularID = UUID()
+            fixture.client.addExisting(id: regularID)
+            fixture.client.addExisting(id: NotificationScheduler.alarmKitTestID)
+            do {
+                _ = try await fixture.scheduler.scheduleTestAlarm { [] }
+                XCTFail("No test alarm should be made from an invented message")
+            } catch {
+                XCTAssertEqual(error.localizedDescription, "Pro test nejsou k dispozici žádná nadcházející nepotvrzená podání.")
+            }
+            XCTAssertEqual(Set(fixture.client.records.keys), [regularID, NotificationScheduler.alarmKitTestID])
+            XCTAssertTrue(fixture.client.cancellationAttempts.isEmpty)
+            XCTAssertTrue(fixture.sounds.contents.isEmpty)
+            XCTAssertEqual(fixture.client.scheduleAttempts, 0)
+            XCTAssertFalse(fixture.scheduler.isScheduling)
+        }
     }
 
     private func makeFixture(
