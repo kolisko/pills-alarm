@@ -1,0 +1,119 @@
+{
+  "measured_on": "2026-10-17",
+  "environment": {
+    "platform": "iOS Simulator",
+    "ios": "26.5",
+    "device_type": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+    "xcode": "27.1"
+  },
+  "scope": "Synthetic fixtures; real AlarmKit scheduling and Czech speech. Excludes application startup, authorization and fixture creation.",
+  "voice": "com.apple.voice.super-compact.cs-CZ.Zuzana",
+  "cases": [
+    {
+      "alarm_count": 60,
+      "medications_per_alarm": 3,
+      "unique_audio_contents": 6,
+      "fixture_seconds": 0.0004345,
+      "passes": [
+        {
+          "alarms": 60,
+          "audio_seconds": 1.8041525389999993,
+          "cache_hits": 54,
+          "generated_files": 6,
+          "pass": "cold",
+          "tone_fallbacks": 0,
+          "total_seconds": 2.081340625
+        },
+        {
+          "alarms": 60,
+          "audio_seconds": 0.012498584,
+          "cache_hits": 60,
+          "generated_files": 0,
+          "pass": "reuse_1",
+          "tone_fallbacks": 0,
+          "total_seconds": 0.227863084
+        },
+        {
+          "alarms": 60,
+          "audio_seconds": 0.012353668000000002,
+          "cache_hits": 60,
+          "generated_files": 0,
+          "pass": "reuse_2",
+          "tone_fallbacks": 0,
+          "total_seconds": 0.22257125
+        },
+        {
+          "alarms": 60,
+          "audio_seconds": 0.011044082000000002,
+          "cache_hits": 60,
+          "generated_files": 0,
+          "pass": "reuse_3",
+          "tone_fallbacks": 0,
+          "total_seconds": 0.204057208
+        },
+        {
+          "alarms": 60,
+          "audio_seconds": 0,
+          "cache_hits": 0,
+          "generated_files": 0,
+          "pass": "tone_baseline",
+          "tone_fallbacks": 0,
+          "total_seconds": 0.161363208
+        }
+      ]
+    },
+    {
+      "alarm_count": 60,
+      "medications_per_alarm": 3,
+      "unique_audio_contents": 60,
+      "fixture_seconds": 0.001246334,
+      "passes": [
+        {
+          "alarms": 60,
+          "audio_seconds": 7.5905827530000005,
+          "cache_hits": 0,
+          "generated_files": 16,
+          "pass": "cold",
+          "tone_fallbacks": 44,
+          "total_seconds": 8.640851417
+        },
+        {
+          "alarms": 60,
+          "audio_seconds": 7.396925579000001,
+          "cache_hits": 16,
+          "generated_files": 40,
+          "pass": "reuse_1",
+          "tone_fallbacks": 4,
+          "total_seconds": 8.048036084
+        },
+        {
+          "alarms": 60,
+          "audio_seconds": 1.1871065010000001,
+          "cache_hits": 56,
+          "generated_files": 4,
+          "pass": "reuse_2",
+          "tone_fallbacks": 0,
+          "total_seconds": 1.820639584
+        },
+        {
+          "alarms": 60,
+          "audio_seconds": 0.022478461000000005,
+          "cache_hits": 60,
+          "generated_files": 0,
+          "pass": "reuse_3",
+          "tone_fallbacks": 0,
+          "total_seconds": 0.414809834
+        },
+        {
+          "alarms": 60,
+          "audio_seconds": 0,
+          "cache_hits": 0,
+          "generated_files": 0,
+          "pass": "tone_baseline",
+          "tone_fallbacks": 0,
+          "total_seconds": 0.391390916
+        }
+      ]
+    }
+  ]
+}

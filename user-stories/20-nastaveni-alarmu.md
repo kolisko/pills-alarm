@@ -48,6 +48,28 @@ Test `AlarmSchedulerTests.testOpenIntentStopsRealAlarmKitAlarm` je ručně spou�
 
 Test `AlarmAudioTests.testRealCzechSpeechRender` lze spustit s `PILLCARE_SPEECH_SMOKE_TEST=1` v testovacím procesu pro ověření skutečné české syntézy. Na fyzickém iPhonu je nutné poslechem ověřit vlastní zvuk při zamčené obrazovce a ukončené aplikaci, srozumitelnost názvů, zlomků a mililitrů i úplnost delších seznamů.
 
+## Měření doby přeplánování
+Test `AlarmSchedulingBenchmarkTests.testColdAndReusedAudioWithSixtyRealAlarms` se spouští v izolovaném simulátoru s `PILLCARE_ALARM_BENCHMARK=1` v prostředí testovacího procesu. Vyžaduje oprávnění AlarmKit; s existujícími alarmy se přeskočí. Používá skutečnou českou syntézu, diskovou cache a skutečný AlarmKit.
+
+Sada má 60 alarmů, každý se třemi léky. Výchozí varianta obsahuje šest různých hlášek; `PILLCARE_BENCHMARK_UNIQUE_CONTENTS=60` nastaví zátěžovou variantu se 60 různými hláškami. První průchod vymaže pouze nahrávky vlastní testovací sady a měří prázdnou cache. Následují tři opakovaná kompletní přeplánování a srovnání se samotným pípáním. U každého průchodu se ukládá celkový čas, čas audia, počet nových souborů, použití cache a náhradního pípání. Výstup je příloha JSON v `.xcresult`.
+
+Celkový čas zahrnuje současné rušení a vytváření alarmů i přípravu jejich zvuku. Nezahrnuje spuštění testovací aplikace, dialog oprávnění ani vytvoření testovací sady. Na konci se testovací alarmy a jejich nahrávky odstraní. Jde o syntetickou zátěž; výsledky ze simulátoru nejsou měřením na fyzickém iPhonu ani nad osobními plány uživatele.
+
+Měření 17. 10. 2026 v simulátoru iPhone 17 Pro / iOS 26.5 (Xcode 27.1), vždy 60 skutečně nastavených alarmů:
+
+| Různých hlášek | Průchod | Celkem | Nové soubory | Použití cache | Náhradní pípání |
+| --- | --- | --- | --- | --- | --- |
+| 6 | První | 2,081 s | 6 | 54 | 0 |
+| 6 | Další 1 | 0,228 s | 0 | 60 | 0 |
+| 6 | Další 2 | 0,223 s | 0 | 60 | 0 |
+| 6 | Další 3 | 0,204 s | 0 | 60 | 0 |
+| 60 | První | 8,641 s | 16 | 0 | 44 |
+| 60 | Další 1 | 8,048 s | 40 | 16 | 4 |
+| 60 | Další 2 | 1,821 s | 4 | 56 | 0 |
+| 60 | Další 3 | 0,415 s | 0 | 60 | 0 |
+
+Samotná audio část při šesti nových hláškách trvala 1,804 s; použití 60 hotových souborů trvalo 11–22 ms. Srovnávací přeplánování se samotným pípáním trvalo 0,161 s a 0,391 s v jednotlivých bězích. Zátěžová varianta ukazuje, že časový limit může při prvním průchodu ponechat část alarmů s pípáním; kompletní hlasové pokrytí se doplnilo dalšími přeplánováními. Úplné hodnoty jsou v [JSON výsledcích](../docs/alarm-audio-benchmark.json).
+
 ## Chybové stavy
 - Pokud uživatel nastaví hodnotu mimo povolený rozsah, aplikace ji omezí na platnou mez.
 - Pokud přeplánování selže, aplikace zobrazí chybu.

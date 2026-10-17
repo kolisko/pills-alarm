@@ -1,4 +1,6 @@
 import AVFoundation
+import AlarmKit
+import UIKit
 import XCTest
 import PillCore
 @testable import PillsAlarm
@@ -186,4 +188,143 @@ private final class StubSpeechRenderer: AlarmSpeechRendering {
         buffer.floatChannelData![0].initialize(repeating: 0.1, count: 100)
         try file.write(from: buffer)
     }
+}
+
+@MainActor
+final class AlarmSchedulingBenchmarkTests: XCTestCase {
+    func testColdAndReusedAudioWithSixtyRealAlarms() async throws {
+#if targetEnvironment(simulator)
+        guard ProcessInfo.processInfo.environment["PILLCARE_ALARM_BENCHMARK"] == "1" else {
+            throw XCTSkip("Opt-in timing benchmark; needs AlarmKit permission in an isolated simulator")
+        }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("AlarmKit requires iOS 26") }
+        guard try AlarmManager.shared.alarms.isEmpty else { throw XCTSkip("Existing alarms must be preserved") }
+
+        let suite = "AlarmBenchmark.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Sounds", isDirectory: true)
+        let renderer = SystemAlarmSpeechRenderer()
+        let measured = MeasuredAlarmSounds(directory: directory, renderer: renderer)
+        let scheduler = NotificationScheduler(defaults: defaults, alarmSounds: measured, removeLegacyNotifications: {})
+        await scheduler.setAlarmsEnabled(true) { [] }
+        guard scheduler.alarmsEnabled else {
+            XCTFail("Allow AlarmKit in the isolated simulator before running the benchmark")
+            return
+        }
+        scheduler.soundMode = .spoken
+
+        let groupsStart = ContinuousClock.now
+        let groups = benchmarkGroups()
+        let groupingSeconds = groupsStart.duration(to: .now).secondsValue
+        guard let voice = renderer.voiceIdentifier else { throw AlarmAudioError.voiceUnavailable }
+        let names = Set(groups.map { AlarmSpeechContent(group: $0).fileName(voiceIdentifier: voice) })
+        // Only this fixture's files are cleared; the benchmark refuses to run with existing alarms.
+        for name in names { try? FileManager.default.removeItem(at: directory.appendingPathComponent(name)) }
+        defer {
+            for name in names { try? FileManager.default.removeItem(at: directory.appendingPathComponent(name)) }
+        }
+
+        var rows: [[String: Any]] = []
+        var failure: Error?
+        do {
+            for label in ["cold", "reuse_1", "reuse_2", "reuse_3", "tone_baseline"] {
+                if label == "tone_baseline" { scheduler.soundMode = .tone }
+                measured.reset()
+                let start = ContinuousClock.now
+                try await scheduler.rescheduleAlarmGroups(groups).value
+                let elapsed = start.duration(to: .now).secondsValue
+                let actualCount = try AlarmManager.shared.alarms.count
+                XCTAssertEqual(actualCount, 60)
+                rows.append([
+                    "pass": label, "alarms": actualCount, "total_seconds": elapsed,
+                    "audio_seconds": measured.seconds, "cache_hits": measured.hits,
+                    "generated_files": measured.generated, "tone_fallbacks": measured.failures
+                ])
+            }
+        } catch { failure = error }
+        await scheduler.setAlarmsEnabled(false) { [] }
+        XCTAssertTrue(try AlarmManager.shared.alarms.isEmpty)
+
+        var report: [String: Any] = [
+            "ios": UIDevice.current.systemVersion,
+            "simulator": ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? UIDevice.current.model,
+            "alarm_count": groups.count, "medications_per_alarm": 3, "unique_audio_contents": names.count,
+            "fixture_seconds": groupingSeconds, "voice": voice, "passes": rows
+        ]
+        if let failure { report["error"] = failure.localizedDescription }
+        let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        print("ALARM_BENCHMARK\n\(String(decoding: data, as: UTF8.self))")
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+        attachment.name = "Alarm scheduling benchmark"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        if let failure { throw failure }
+#else
+        throw XCTSkip("Use an isolated simulator")
+#endif
+    }
+
+    private func benchmarkGroups() -> [ScheduledDoseAlarmGroup] {
+        let requested = Int(ProcessInfo.processInfo.environment["PILLCARE_BENCHMARK_UNIQUE_CONTENTS"] ?? "6") ?? 6
+        let uniqueContents = min(60, max(1, requested))
+        return (0..<60).map { index in
+            let profile = index % uniqueContents
+            let date = Date().addingTimeInterval(3_600 + Double(index * 900))
+            let amounts = ["½", "1", "1 ½", "2", "¼", "¾"]
+            let entries: [(String, String, MedicationForm)] = [
+                ("Ospolut", amounts[profile % amounts.count], .tablet), ("Trelema", profile % 6 < 3 ? "1" : "2", .tablet),
+                ("Testovací sirup", "\(profile + 1)ml", .syrup)
+            ]
+            let alarms = entries.map { name, amount, form in
+                let dose = GeneratedDose(
+                    id: UUID().uuidString, baseEventId: "", workspaceId: "benchmark", isShared: false,
+                    workspaceName: "", medicationId: UUID(), medicationName: name, medicationNote: "",
+                    medicationColorHex: "", medicationForm: form, timeId: UUID(), timeLabel: "Test",
+                    scheduledDate: date, scheduledTime: TimeOfDay(hour: 8, minute: 0), amount: amount, phaseTitle: "Test"
+                )
+                return ScheduledDoseAlarm(dose: dose, scheduledDate: date, repeatIndex: index / 6)
+            }
+            return ScheduledDoseAlarmGroup(scheduledDate: date, alarms: alarms)
+        }
+    }
+}
+
+@MainActor
+private final class MeasuredAlarmSounds: AlarmSoundProviding {
+    private let directory: URL
+    private let renderer: any AlarmSpeechRendering
+    private let cache: AlarmAudioCache
+    private(set) var seconds = 0.0
+    private(set) var hits = 0
+    private(set) var generated = 0
+    private(set) var failures = 0
+
+    init(directory: URL, renderer: any AlarmSpeechRendering) {
+        self.directory = directory
+        self.renderer = renderer
+        cache = AlarmAudioCache(directory: directory, renderer: renderer)
+    }
+
+    func reset() { seconds = 0; hits = 0; generated = 0; failures = 0 }
+
+    func soundName(for content: AlarmSpeechContent, deadline: ContinuousClock.Instant) async throws -> String {
+        let start = ContinuousClock.now
+        defer { seconds += start.duration(to: .now).secondsValue }
+        let name = content.fileName(voiceIdentifier: renderer.voiceIdentifier ?? "unavailable")
+        let existed = FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path)
+        do {
+            let result = try await cache.soundName(for: content, deadline: deadline)
+            if existed { hits += 1 } else { generated += 1 }
+            return result
+        } catch {
+            failures += 1
+            throw error
+        }
+    }
+}
+
+private extension Duration {
+    var secondsValue: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
 }
