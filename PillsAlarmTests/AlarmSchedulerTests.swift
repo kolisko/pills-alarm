@@ -265,9 +265,96 @@ final class AlarmSchedulerTests: XCTestCase {
         XCTAssertEqual(fixture.scheduler.alarmSettings, settings)
     }
 
+    func testSoundModeDefaultsToToneAndPersistsOnThisDevice() {
+        let fixture = makeFixture()
+        XCTAssertEqual(fixture.scheduler.soundMode, .tone)
+        fixture.scheduler.soundMode = .spoken
+        let restarted = NotificationScheduler(
+            defaults: fixture.defaults, alarmClient: fixture.client, alarmSounds: fixture.sounds,
+            removeLegacyNotifications: {}
+        )
+        XCTAssertEqual(restarted.soundMode, .spoken)
+        XCTAssertFalse(restarted.alarmsEnabled)
+        fixture.defaults.set("unknown-mode", forKey: NotificationScheduler.soundModeKey)
+        let unknownMode = NotificationScheduler(
+            defaults: fixture.defaults, alarmClient: fixture.client, alarmSounds: fixture.sounds,
+            removeLegacyNotifications: {}
+        )
+        XCTAssertEqual(unknownMode.soundMode, .tone)
+    }
+
+    func testToneDoesNotRequestSpeech() async throws {
+        let fixture = makeFixture(enabled: true)
+        try await fixture.scheduler.rescheduleAlarmGroups([makeGroup("Morning")]).value
+        XCTAssertTrue(fixture.sounds.contents.isEmpty)
+        XCTAssertEqual(fixture.client.records.values.first?.soundName, NotificationScheduler.doseAlarmSoundName)
+    }
+
+    func testSpokenModeStillCancelsAndRecreatesAllAlarmsUsingStableSoundNames() async throws {
+        let fixture = makeFixture(enabled: true)
+        fixture.scheduler.soundMode = .spoken
+        let now = Date()
+        let first = makeGroup("Lék", at: now.addingTimeInterval(600))
+        let second = makeGroup("Lék", at: now.addingTimeInterval(1_200))
+        try await fixture.scheduler.rescheduleAlarmGroups([first, second]).value
+        let oldIDs = Set(fixture.client.records.keys)
+        let names = Set(fixture.client.records.values.compactMap(\.soundName))
+        XCTAssertEqual(names.count, 1)
+        XCTAssertEqual(fixture.sounds.contents.first?.lines, ["Jedna tableta Lék."])
+        try await fixture.scheduler.rescheduleAlarmGroups([first, second]).value
+        XCTAssertTrue(oldIDs.isDisjoint(with: fixture.client.records.keys))
+        XCTAssertTrue(oldIDs.isSubset(of: Set(fixture.client.cancellationAttempts)))
+        XCTAssertEqual(Set(fixture.client.records.values.compactMap(\.soundName)), names)
+
+        var reduced = first
+        reduced.alarms[0].dose.amount = "½"
+        try await fixture.scheduler.rescheduleAlarmGroups([reduced]).value
+        XCTAssertFalse(names.contains(try XCTUnwrap(fixture.client.records.values.first?.soundName)))
+        XCTAssertEqual(fixture.sounds.contents.last?.lines, ["Půl tablety Lék."])
+    }
+
+    func testSpeechFailureStillSchedulesEveryAlarmWithExistingTone() async throws {
+        let fixture = makeFixture(enabled: true)
+        fixture.scheduler.soundMode = .spoken
+        fixture.sounds.fail = true
+        try await fixture.scheduler.rescheduleAlarmGroups([makeGroup("One"), makeGroup("Two")]).value
+        XCTAssertEqual(fixture.client.records.count, 2)
+        XCTAssertTrue(fixture.client.records.values.allSatisfy { $0.soundName == NotificationScheduler.doseAlarmSoundName })
+        XCTAssertNotNil(fixture.scheduler.lastSoundWarning)
+        XCTAssertNil(fixture.scheduler.lastSchedulingError)
+        fixture.scheduler.soundMode = .tone
+        try await fixture.scheduler.rescheduleAlarmGroups([makeGroup("One")]).value
+        XCTAssertNil(fixture.scheduler.lastSoundWarning)
+    }
+
+    func testDisablingDuringSpeechCancelsSynthesisAndLeavesNoAlarm() async {
+        let fixture = makeFixture(enabled: true)
+        fixture.scheduler.soundMode = .spoken
+        fixture.sounds.suspend = true
+        let planning = fixture.scheduler.rescheduleAlarmGroups([makeGroup("One")])
+        await waitUntil { !fixture.sounds.contents.isEmpty }
+        await fixture.scheduler.setAlarmsEnabled(false) { [] }
+        _ = await planning.result
+        XCTAssertEqual(fixture.client.scheduleAttempts, 0)
+        XCTAssertTrue(fixture.client.records.isEmpty)
+        XCTAssertNil(fixture.scheduler.lastSoundWarning)
+        XCTAssertNil(fixture.scheduler.lastSchedulingError)
+    }
+
+    func testTestAlarmUsesSelectedVoiceWithoutSpeakingAnInventedDose() async throws {
+        let fixture = makeFixture(enabled: true)
+        fixture.scheduler.soundMode = .spoken
+        _ = try await fixture.scheduler.scheduleTestAlarm()
+        XCTAssertEqual(fixture.sounds.contents, [.test])
+        XCTAssertEqual(
+            fixture.client.records[NotificationScheduler.alarmKitTestID]?.soundName,
+            AlarmSpeechContent.test.fileName(voiceIdentifier: "test")
+        )
+    }
+
     private func makeFixture(
         enabled: Bool? = nil, legacy: String? = nil, available: Bool = true
-    ) -> (scheduler: NotificationScheduler, client: FakeAlarmKitClient, defaults: UserDefaults, cleanup: CleanupSpy) {
+    ) -> (scheduler: NotificationScheduler, client: FakeAlarmKitClient, defaults: UserDefaults, cleanup: CleanupSpy, sounds: FakeAlarmSounds) {
         let suiteName = "AlarmSchedulerTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         if let enabled { defaults.set(enabled, forKey: NotificationScheduler.alarmsEnabledKey) }
@@ -276,10 +363,11 @@ final class AlarmSchedulerTests: XCTestCase {
         let client = FakeAlarmKitClient()
         client.isAvailable = available
         let cleanup = CleanupSpy()
+        let sounds = FakeAlarmSounds()
         let scheduler = NotificationScheduler(
-            defaults: defaults, alarmClient: client, removeLegacyNotifications: { cleanup.calls += 1 }
+            defaults: defaults, alarmClient: client, alarmSounds: sounds, removeLegacyNotifications: { cleanup.calls += 1 }
         )
-        return (scheduler, client, defaults, cleanup)
+        return (scheduler, client, defaults, cleanup, sounds)
     }
 
     private func makeGroup(_ name: String, at date: Date = Date().addingTimeInterval(600)) -> ScheduledDoseAlarmGroup {
@@ -298,6 +386,20 @@ final class AlarmSchedulerTests: XCTestCase {
         let deadline = Date().addingTimeInterval(3)
         while !condition(), Date() < deadline { await Task.yield() }
         XCTAssertTrue(condition(), "Expected suspended operation to reach the test checkpoint")
+    }
+}
+
+@MainActor
+private final class FakeAlarmSounds: AlarmSoundProviding {
+    var contents: [AlarmSpeechContent] = []
+    var fail = false
+    var suspend = false
+
+    func soundName(for content: AlarmSpeechContent, deadline: ContinuousClock.Instant) async throws -> String {
+        contents.append(content)
+        if suspend { try await Task.sleep(for: .seconds(30)) }
+        if fail { throw AlarmAudioError.emptySpeech }
+        return content.fileName(voiceIdentifier: "test")
     }
 }
 

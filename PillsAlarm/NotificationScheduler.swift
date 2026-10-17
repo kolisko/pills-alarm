@@ -11,6 +11,7 @@ final class NotificationScheduler: ObservableObject {
 
     private let defaults: UserDefaults
     private let alarmClient: any AlarmKitScheduling
+    private let alarmSounds: any AlarmSoundProviding
     private let removeLegacyNotifications: @MainActor () -> Void
     private var pendingOperation: Task<Void, Error>?
     private var operationID = UUID()
@@ -18,6 +19,10 @@ final class NotificationScheduler: ObservableObject {
     @Published private(set) var lastScheduledCount = 0
     @Published private(set) var lastSchedulingDate: Date?
     @Published private(set) var lastSchedulingError: String?
+    @Published private(set) var lastSoundWarning: String?
+    @Published var soundMode: AlarmSoundMode {
+        didSet { defaults.set(soundMode.rawValue, forKey: Self.soundModeKey) }
+    }
     @Published private(set) var isChangingAlarmState = false
     @Published private(set) var alarmsEnabled: Bool {
         didSet {
@@ -36,6 +41,7 @@ final class NotificationScheduler: ObservableObject {
     static let doseAlarmDurationSeconds = 30
     private static let alarmSettingsKey = "alarmSettings.v1"
     static let alarmsEnabledKey = "alarmKitEnabled.v1"
+    static let soundModeKey = "alarmSoundMode.v1"
     private static let legacyDeliveryMethodKey = "alarmDeliveryMethod.v1"
     private static let alarmKitInfoKey = "alarmKitScheduledInfo.v1"
     static let alarmKitTestID = UUID(uuidString: "E45F749D-5B66-4DC5-98C8-71BFCDF677C0")!
@@ -43,11 +49,14 @@ final class NotificationScheduler: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         alarmClient: (any AlarmKitScheduling)? = nil,
+        alarmSounds: (any AlarmSoundProviding)? = nil,
         removeLegacyNotifications: (@MainActor () -> Void)? = nil
     ) {
         self.defaults = defaults
         let client = alarmClient ?? SystemAlarmKitClient()
         self.alarmClient = client
+        self.alarmSounds = alarmSounds ?? AlarmAudioCache()
+        soundMode = defaults.string(forKey: Self.soundModeKey).flatMap(AlarmSoundMode.init(rawValue:)) ?? .tone
         self.removeLegacyNotifications = removeLegacyNotifications ?? {
             let center = UNUserNotificationCenter.current()
             center.removeAllPendingNotificationRequests()
@@ -124,6 +133,7 @@ final class NotificationScheduler: ObservableObject {
             guard self.alarmsEnabled else {
                 try self.cancelAllAlarmKitAlarms()
                 self.lastScheduledCount = 0
+                self.lastSoundWarning = nil
                 return
             }
             try self.checkSchedulingAllowed()
@@ -284,6 +294,9 @@ final class NotificationScheduler: ObservableObject {
     }
 
     private func scheduleAlarmKitAlarms(_ alarmGroups: [ScheduledDoseAlarmGroup]) async throws -> Int {
+        lastSoundWarning = nil
+        // One shared generation budget for this pass; cache hits remain usable after it expires.
+        let soundDeadline = ContinuousClock.now.advanced(by: .seconds(8))
         let alarms = try alarmClient.alarms()
         try cancelAlarms(alarms.filter { $0.id != Self.alarmKitTestID })
         let preservedTestInfo = loadAlarmKitInfo().filter { info in
@@ -295,7 +308,15 @@ final class NotificationScheduler: ObservableObject {
             for group in alarmGroups {
                 try checkSchedulingAllowed()
                 let content = Self.content(for: group)
-                let info = StoredAlarmKitInfo(id: UUID(), title: content.title, body: content.body, scheduledDate: group.scheduledDate)
+                let latestSoundTime = ContinuousClock.now.advanced(by: .seconds(max(0, group.scheduledDate.timeIntervalSinceNow - 1)))
+                let soundName = try await soundName(
+                    for: AlarmSpeechContent(group: group), deadline: min(soundDeadline, latestSoundTime)
+                )
+                try checkSchedulingAllowed()
+                let info = StoredAlarmKitInfo(
+                    id: UUID(), title: content.title, body: content.body, scheduledDate: group.scheduledDate,
+                    soundName: soundName
+                )
                 try await alarmClient.schedule(info)
                 scheduledIDs.append(info.id)
                 try checkSchedulingAllowed()
@@ -311,13 +332,17 @@ final class NotificationScheduler: ObservableObject {
     }
 
     private func scheduleAlarmKitTest(at scheduledDate: Date) async throws {
+        lastSoundWarning = nil
         let existing = try alarmClient.alarms().filter { $0.id == Self.alarmKitTestID }
         try cancelAlarms(existing)
         var storedInfo = loadAlarmKitInfo().filter { $0.id != Self.alarmKitTestID }
         saveAlarmKitInfo(storedInfo)
+        let soundName = try await soundName(for: .test, deadline: .now.advanced(by: .seconds(8)))
+        try checkSchedulingAllowed()
         let info = StoredAlarmKitInfo(
             id: Self.alarmKitTestID, title: "Test alarmu Pill Care",
-            body: "Pokud vidíte a slyšíte tento alarm, AlarmKit funguje.", scheduledDate: scheduledDate
+            body: "Pokud vidíte a slyšíte tento alarm, AlarmKit funguje.", scheduledDate: scheduledDate,
+            soundName: soundName
         )
         try await alarmClient.schedule(info)
         do {
@@ -328,6 +353,19 @@ final class NotificationScheduler: ObservableObject {
         }
         storedInfo.append(info)
         saveAlarmKitInfo(storedInfo)
+    }
+
+    private func soundName(for content: @autoclosure () -> AlarmSpeechContent, deadline: ContinuousClock.Instant) async throws -> String {
+        guard soundMode == .spoken else { return Self.doseAlarmSoundName }
+        do {
+            return try await alarmSounds.soundName(for: content(), deadline: deadline)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            lastSoundWarning = "Některé alarmy použijí pípání. \(error.localizedDescription)"
+            return Self.doseAlarmSoundName
+        }
     }
 
     private func cancelAlarms(_ alarms: [AlarmKitAlarm]) throws {
@@ -437,7 +475,7 @@ private final class SystemAlarmKitClient: AlarmKitScheduling {
         let configuration = AlarmManager.AlarmConfiguration.alarm(
             schedule: .fixed(info.scheduledDate), attributes: attributes,
             secondaryIntent: OpenPillsAppIntent(alarmID: info.id),
-            sound: .named(NotificationScheduler.doseAlarmSoundName)
+            sound: .named(info.soundName ?? NotificationScheduler.doseAlarmSoundName)
         )
         _ = try await AlarmManager.shared.schedule(id: info.id, configuration: configuration)
     }
@@ -469,6 +507,7 @@ struct StoredAlarmKitInfo: Codable, Sendable {
     var title: String
     var body: String
     var scheduledDate: Date
+    var soundName: String? = nil
 }
 
 struct AlarmKitAlarm {

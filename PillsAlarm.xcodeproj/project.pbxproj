@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10000000000000000000034 /* AlarmAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000037 /* AlarmAudio.swift */; };
+		B10000000000000000000007 /* AlarmAudioTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000008 /* AlarmAudioTests.swift */; };
 		A10000000000000000000001 /* PillsAlarmApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PillsAlarmApp.swift */; };
 		A10000000000000000000004 /* MedicationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* MedicationStore.swift */; };
 		A10000000000000000000005 /* NotificationScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* NotificationScheduler.swift */; };
@@ -49,6 +51,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A20000000000000000000037 /* AlarmAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmAudio.swift; sourceTree = "<group>"; };
+		B20000000000000000000008 /* AlarmAudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmAudioTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* PillsAlarmApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillsAlarmApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000004 /* MedicationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MedicationStore.swift; sourceTree = "<group>"; };
 		A20000000000000000000005 /* NotificationScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationScheduler.swift; sourceTree = "<group>"; };
@@ -123,6 +127,7 @@
 				A20000000000000000000004 /* MedicationStore.swift */,
 				A20000000000000000000018 /* CloudKitIntegrationRunner.swift */,
 				A20000000000000000000005 /* NotificationScheduler.swift */,
+				A20000000000000000000037 /* AlarmAudio.swift */,
 				A20000000000000000000035 /* AppNavigation.swift */,
 				A20000000000000000000036 /* OpenPillsAppIntent.swift */,
 				A20000000000000000000015 /* PillsAlarm.entitlements */,
@@ -167,6 +172,7 @@
 				B20000000000000000000005 /* ConfirmationPersistenceTests.swift */,
 				B20000000000000000000006 /* AlarmSchedulerTests.swift */,
 				B20000000000000000000007 /* AlarmNavigationTests.swift */,
+				B20000000000000000000008 /* AlarmAudioTests.swift */,
 			);
 			path = PillsAlarmTests;
 			sourceTree = "<group>";
@@ -271,6 +277,7 @@
 				A10000000000000000000001 /* PillsAlarmApp.swift in Sources */,
 				A10000000000000000000004 /* MedicationStore.swift in Sources */,
 				A10000000000000000000005 /* NotificationScheduler.swift in Sources */,
+				A10000000000000000000034 /* AlarmAudio.swift in Sources */,
 				A10000000000000000000006 /* ContentView.swift in Sources */,
 				A10000000000000000000007 /* TodayView.swift in Sources */,
 				A10000000000000000000008 /* PlanView.swift in Sources */,
@@ -300,6 +307,7 @@
 				B10000000000000000000004 /* ConfirmationPersistenceTests.swift in Sources */,
 				B10000000000000000000005 /* AlarmSchedulerTests.swift in Sources */,
 				B10000000000000000000006 /* AlarmNavigationTests.swift in Sources */,
+				B10000000000000000000007 /* AlarmAudioTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

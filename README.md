@@ -70,6 +70,12 @@ Entitlements are defined in `PillsAlarm/PillsAlarm.entitlements`.
 
 The setting is local to each device. Existing AlarmKit users remain enabled after upgrading. New installations and the retired local-notification mode start with alarms off. Legacy local notifications are cleared when the app starts or returns to the foreground. No medication or CloudKit record migration is involved.
 
+The sound picker offers `Pípání` (the existing default) and `Pípání a hlas`. Spoken alarms use the original beep followed by Czech speech for every dose in the existing aggregated alarm, with pauses between medications. Complete lists repeat with beeps between them within a 29.5-second sound. Tablet fractions and syrup units are expanded for speech. The test alarm follows the selected sound mode and speaks a test message.
+
+Speech is generated on the device only for groups supplied by the existing scheduler. Completed CAF files in `Library/Sounds` have stable SHA-256 names derived from the spoken content, Czech voice and renderer version. Identical groups reuse the same file across dates, reminders, rescheduling and app restarts. A changed amount, medication name, form or group produces different audio. There is no extra phase preparation or change to cancellation, grouping, repeat rules, scheduling horizon or alarm count.
+
+New speech generation shares an eight-second budget per scheduling pass and stops earlier for imminent alarms. Cache hits still work after that budget expires. Missing voices, generation errors and lists that cannot fit in full use the original beep and show a warning in alarm settings and the audit. Interrupted files are discarded; medication lists are never truncated. Disabling alarms or superseding a scheduling pass cancels pending synthesis. Sound selection is stored only on the current device.
+
 ## Build And Test
 
 Run the pure core test suite:

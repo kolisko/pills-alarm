@@ -84,7 +84,7 @@ struct AlarmAuditView: View {
             Section("Plánování") {
                 AuditRow(
                     title: "Zvuk alarmu",
-                    value: "\(NotificationScheduler.doseAlarmDurationSeconds) s",
+                    value: scheduler.soundMode.label,
                     systemImage: "speaker.wave.3.fill",
                     tint: .teal
                 )
@@ -121,6 +121,11 @@ struct AlarmAuditView: View {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
                         .foregroundStyle(.red)
+                }
+                if let warning = scheduler.lastSoundWarning {
+                    Label(warning, systemImage: "speaker.badge.exclamationmark")
+                        .font(.subheadline)
+                        .foregroundStyle(.orange)
                 }
 
                 Button {
@@ -274,16 +279,31 @@ private struct AlarmSettingsView: View {
             }
 
             Section {
+                Picker("Zvuk alarmu", selection: soundModeBinding) {
+                    ForEach(AlarmSoundMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .disabled(scheduler.isChangingAlarmState)
+
                 AuditRow(
                     title: "Délka zvuku",
-                    value: "\(NotificationScheduler.doseAlarmDurationSeconds) s",
+                    value: scheduler.soundMode == .tone ? "\(NotificationScheduler.doseAlarmDurationSeconds) s" : "Do 30 s",
                     systemImage: "speaker.wave.3.fill",
                     tint: .teal
                 )
             } header: {
                 Text("Zvuk")
             } footer: {
-                Text("Délka zvuku je daná souborem v aplikaci a nejde ji měnit dynamicky.")
+                Text("Pípání a hlas přehraje původní pípání a přečte množství a názvy všech léků v alarmu s krátkými pauzami. Volba platí jen pro toto zařízení. Pokud hlas nelze připravit, zazní pípání.")
+            }
+
+            if let warning = scheduler.lastSoundWarning {
+                Section {
+                    Label(warning, systemImage: "speaker.badge.exclamationmark")
+                        .font(.subheadline)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Section {
@@ -315,6 +335,7 @@ private struct AlarmSettingsView: View {
             Section {
                 Button {
                     scheduler.alarmSettings = .defaultValue
+                    scheduler.soundMode = .tone
                     scheduler.rescheduleUpcomingDoses(store: store)
                 } label: {
                     Label("Obnovit výchozí nastavení", systemImage: "arrow.counterclockwise")
@@ -332,6 +353,16 @@ private struct AlarmSettingsView: View {
             Task {
                 await scheduler.setAlarmsEnabled(enabled, store: store)
             }
+        }
+    }
+
+    private var soundModeBinding: Binding<AlarmSoundMode> {
+        Binding {
+            scheduler.soundMode
+        } set: { mode in
+            scheduler.soundMode = mode
+            testStatusMessage = nil
+            scheduler.rescheduleUpcomingDoses(store: store)
         }
     }
 
