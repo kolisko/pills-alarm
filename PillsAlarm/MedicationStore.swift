@@ -1587,3 +1587,27 @@ final class MedicationStore: ObservableObject {
     private static let acceptedSharedGroupReferencesKey = "PillCareAcceptedSharedGroupReferences"
     private static let hiddenSharedWorkspaceIdsKey = "PillCareHiddenSharedWorkspaceIds"
 }
+
+#if DEBUG && targetEnvironment(simulator)
+extension MedicationStore {
+    // Supply in-memory plans for opt-in Control Center tests without touching CloudKit.
+    func withAlarmControlUITestMedication(_ medication: Medication, operation: () async throws -> Void) async rethrows {
+        precondition(ProcessInfo.processInfo.environment["PILLCARE_ALARM_BENCHMARK"] == "1")
+        precondition(ProcessInfo.processInfo.environment["PILLCARE_CONTROL_UI_TEST"] == "1")
+        precondition(medicationItems.isEmpty && confirmations.isEmpty && workspaceContexts.isEmpty)
+        let originalState = loadState
+        let originalMedications = medications
+        let originalItems = medicationItems
+        defer {
+            medications = originalMedications
+            medicationItems = originalItems
+            loadState = originalState
+        }
+        let source = WorkspaceSource(id: "control-ui-test", name: "UI test", isShared: false)
+        medications = [medication]
+        medicationItems = [MedicationListItem(medication: medication, source: source)]
+        loadState = .ready
+        try await operation()
+    }
+}
+#endif

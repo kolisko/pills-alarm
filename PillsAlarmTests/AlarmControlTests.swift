@@ -262,6 +262,69 @@ final class AlarmControlTests: XCTestCase {
 #endif
     }
 
+    func testActualControlTapsRoundTripWithLoadedPlan() async throws {
+#if DEBUG && targetEnvironment(simulator)
+        guard ProcessInfo.processInfo.environment["PILLCARE_CONTROL_UI_TEST"] == "1",
+              ProcessInfo.processInfo.environment["PILLCARE_ALARM_BENCHMARK"] == "1" else {
+            throw XCTSkip("Opt-in: tap the real Control Center toggle in both directions")
+        }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("Requires AlarmKit") }
+        let scheduler = NotificationScheduler.shared
+        let store = MedicationStore.shared
+        await scheduler.waitForPendingOperations()
+        guard try AlarmManager.shared.alarms.isEmpty, store.medicationItems.isEmpty else {
+            throw XCTSkip("Requires an isolated simulator without plans or alarms")
+        }
+        guard AlarmManager.shared.authorizationState == .authorized else {
+            throw XCTSkip("Requires AlarmKit permission in the isolated simulator")
+        }
+        let originalEnabled = scheduler.alarmsEnabled
+        let originalSound = scheduler.soundMode
+        let nextDose = Date().addingTimeInterval(1200)
+        let time = DoseTime(
+            id: UUID(), label: "UI test",
+            time: TimeOfDay(hour: Calendar.current.component(.hour, from: nextDose),
+                            minute: Calendar.current.component(.minute, from: nextDose))
+        )
+        let medication = Medication(
+            id: UUID(), name: "Control UI test", note: "", colorHex: "#009999",
+            startDate: Calendar.current.startOfDay(for: nextDose), doseTimes: [time],
+            phases: [PlanPhase(title: "Phase 1", durationDays: 1, doses: [DoseEntry(timeId: time.id, amount: 1)])]
+        )
+        var failure: Error?
+        do {
+            scheduler.soundMode = .tone
+            try await scheduler.setAlarmsEnabledAndWait(false) { [] }
+            try await store.withAlarmControlUITestMedication(medication) {
+                let expectedCount = scheduler.makeUpcomingDoseAlarmGroups(store: store).count
+                XCTAssertGreaterThan(expectedCount, 0)
+                for (index, enabled) in [true, false, true, false, true, false].enumerated() {
+                    print("CONTROL_ROUNDTRIP_READY: step=\(index + 1) targetEnabled=\(enabled)")
+                    let deadline = Date().addingTimeInterval(90)
+                    while scheduler.alarmsEnabled != enabled, Date() < deadline {
+                        try await Task.sleep(for: .milliseconds(100))
+                    }
+                    await scheduler.waitForPendingOperations()
+                    try await Task.sleep(for: .seconds(2))
+                    XCTAssertEqual(scheduler.alarmsEnabled, enabled, "Tap the actual Control Center button")
+                    XCTAssertEqual(try AlarmControlState.currentValue(), enabled)
+                    XCTAssertNil(scheduler.lastSchedulingError)
+                    let count = try AlarmManager.shared.alarms.count
+                    XCTAssertEqual(count, enabled ? expectedCount : 0)
+                    print("CONTROL_ROUNDTRIP_VERIFIED: step=\(index + 1) enabled=\(scheduler.alarmsEnabled) alarms=\(count)")
+                }
+            }
+        } catch { failure = error }
+        await scheduler.setAlarmsEnabled(false) { [] }
+        scheduler.soundMode = originalSound
+        if originalEnabled { await scheduler.setAlarmsEnabled(true) { [] } }
+        XCTAssertTrue(try AlarmManager.shared.alarms.isEmpty)
+        if let failure { throw failure }
+#else
+        throw XCTSkip("Simulator-only")
+#endif
+    }
+
     func testControlIntentCancelsRealRingingAndFutureAlarms() async throws {
 #if targetEnvironment(simulator)
         guard ProcessInfo.processInfo.environment["PILLCARE_CONTROL_INTENT_TEST"] == "1",
