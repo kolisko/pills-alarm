@@ -95,6 +95,10 @@ xcodebuild test \
   -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest'
 ```
 
+## App Icon
+
+The app icon uses the same round tablet and diagonal score as the Control Center toggle, without the bell badge. The blue-green background is preserved. Regenerate all catalog sizes with `swift Tools/generate-app-icons.swift`; use `--check` to validate dimensions, opacity, centering, and score direction without changing files.
+
 ## GitHub Automation
 
 This repository uses GitHub Actions for:
