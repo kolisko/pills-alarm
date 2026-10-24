@@ -137,7 +137,7 @@ struct PillsAlarmApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(SyncSettings.autoRefreshIntervalMinutesKey) private var autoRefreshIntervalMinutes = SyncSettings.defaultAutoRefreshIntervalMinutes
-    @StateObject private var store = MedicationStore()
+    @StateObject private var store = MedicationStore.shared
     @StateObject private var cloudSync = CloudSyncCoordinator()
     @StateObject private var networkStatus = NetworkStatusMonitor()
 

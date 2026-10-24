@@ -7,6 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D10000000000000000000008 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000008; };
+		D10000000000000000000009 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000009; };
+		D10000000000000000000001 /* AlarmControlState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
+		D10000000000000000000002 /* SetPillsAlarmsIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002; };
+		D10000000000000000000003 /* AlarmControlState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
+		D10000000000000000000004 /* SetPillsAlarmsIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002; };
+		D10000000000000000000005 /* PillsAlarmControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000003; };
+		D10000000000000000000006 /* PillsAlarmControls.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = D20000000000000000000006; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		D10000000000000000000007 /* AlarmControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000007; };
 		B10000000000000000000008 /* CloudSyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000009 /* CloudSyncCoordinatorTests.swift */; };
 		A10000000000000000000034 /* AlarmAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000037 /* AlarmAudio.swift */; };
 		B10000000000000000000007 /* AlarmAudioTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000008 /* AlarmAudioTests.swift */; };
@@ -42,6 +51,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		D60000000000000000000001 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A60000000000000000000001;
+			proxyType = 1;
+			remoteGlobalIDString = D50000000000000000000001;
+			remoteInfo = PillsAlarmControls;
+		};
 		B60000000000000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A60000000000000000000001 /* Project object */;
@@ -51,7 +67,28 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		D70000000000000000000002 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (D10000000000000000000006, );
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		D20000000000000000000008 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		D20000000000000000000009 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		D20000000000000000000001 /* AlarmControlState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmControlState.swift; sourceTree = "<group>"; };
+		D20000000000000000000002 /* SetPillsAlarmsIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetPillsAlarmsIntent.swift; sourceTree = "<group>"; };
+		D20000000000000000000003 /* PillsAlarmControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillsAlarmControls.swift; sourceTree = "<group>"; };
+		D20000000000000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		D20000000000000000000005 /* PillsAlarmControls.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PillsAlarmControls.entitlements; sourceTree = "<group>"; };
+		D20000000000000000000006 /* PillsAlarmControls.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = PillsAlarmControls.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D20000000000000000000007 /* AlarmControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmControlTests.swift; sourceTree = "<group>"; };
 		B20000000000000000000009 /* CloudSyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000037 /* AlarmAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmAudio.swift; sourceTree = "<group>"; };
 		B20000000000000000000008 /* AlarmAudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmAudioTests.swift; sourceTree = "<group>"; };
@@ -108,10 +145,17 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		D40000000000000000000001 /* PillsAlarmControls */ = {
+			isa = PBXGroup;
+			children = (D20000000000000000000003, D20000000000000000000004, D20000000000000000000005, D20000000000000000000009, );
+			path = PillsAlarmControls;
+			sourceTree = "<group>";
+		};
 		A40000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
 				A40000000000000000000002 /* PillsAlarm */,
+				D40000000000000000000001 /* PillsAlarmControls */,
 				B40000000000000000000001 /* PillsAlarmTests */,
 				A40000000000000000000003 /* Products */,
 			);
@@ -120,6 +164,9 @@
 		A40000000000000000000002 /* PillsAlarm */ = {
 			isa = PBXGroup;
 			children = (
+				D20000000000000000000008 /* PrivacyInfo.xcprivacy */,
+				D20000000000000000000001 /* AlarmControlState.swift */,
+				D20000000000000000000002 /* SetPillsAlarmsIntent.swift */,
 				A20000000000000000000001 /* PillsAlarmApp.swift */,
 				A20000000000000000000013 /* AppDelegate.swift */,
 				A20000000000000000000034 /* CloudKitModels.swift */,
@@ -145,6 +192,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000012 /* PillsAlarm.app */,
+				D20000000000000000000006 /* PillsAlarmControls.appex */,
 				B20000000000000000000002 /* PillsAlarmTests.xctest */,
 			);
 			name = Products;
@@ -168,6 +216,7 @@
 		B40000000000000000000001 /* PillsAlarmTests */ = {
 			isa = PBXGroup;
 			children = (
+				D20000000000000000000007 /* AlarmControlTests.swift */,
 				B20000000000000000000001 /* ConfirmationStateStoreTests.swift */,
 				B20000000000000000000003 /* MedicationDomainStoreTests.swift */,
 				B20000000000000000000004 /* BusinessRulesTests.swift */,
@@ -183,6 +232,17 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		D50000000000000000000001 /* PillsAlarmControls */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D90000000000000000000001;
+			buildPhases = (D70000000000000000000001, D70000000000000000000003, );
+			buildRules = ();
+			dependencies = ();
+			name = PillsAlarmControls;
+			productName = PillsAlarmControls;
+			productReference = D20000000000000000000006;
+			productType = "com.apple.product-type.app-extension";
+		};
 		A50000000000000000000001 /* PillsAlarm */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A90000000000000000000002 /* Build configuration list for PBXNativeTarget "PillsAlarm" */;
@@ -190,10 +250,12 @@
 				A70000000000000000000001 /* Sources */,
 				A30000000000000000000001 /* Frameworks */,
 				A80000000000000000000001 /* Resources */,
+				D70000000000000000000002 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D60000000000000000000002 /* PBXTargetDependency */,
 			);
 			name = PillsAlarm;
 			packageProductDependencies = (
@@ -255,16 +317,24 @@
 			projectRoot = "";
 			targets = (
 				A50000000000000000000001 /* PillsAlarm */,
+				D50000000000000000000001 /* PillsAlarmControls */,
 				B50000000000000000000001 /* PillsAlarmTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		D70000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (D10000000000000000000009, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A80000000000000000000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10000000000000000000008 /* PrivacyInfo.xcprivacy in Resources */,
 				A10000000000000000000014 /* Assets.xcassets in Resources */,
 				A10000000000000000000017 /* DoseAlarm.wav in Resources */,
 			);
@@ -273,10 +343,18 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		D70000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (D10000000000000000000003, D10000000000000000000004, D10000000000000000000005, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A70000000000000000000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10000000000000000000001 /* AlarmControlState.swift in Sources */,
+				D10000000000000000000002 /* SetPillsAlarmsIntent.swift in Sources */,
 				A10000000000000000000001 /* PillsAlarmApp.swift in Sources */,
 				A10000000000000000000004 /* MedicationStore.swift in Sources */,
 				A10000000000000000000005 /* NotificationScheduler.swift in Sources */,
@@ -304,6 +382,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10000000000000000000007 /* AlarmControlTests.swift in Sources */,
 				B10000000000000000000001 /* ConfirmationStateStoreTests.swift in Sources */,
 				B10000000000000000000002 /* MedicationDomainStoreTests.swift in Sources */,
 				B10000000000000000000003 /* BusinessRulesTests.swift in Sources */,
@@ -318,6 +397,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		D60000000000000000000002 = {
+			isa = PBXTargetDependency;
+			target = D50000000000000000000001;
+			targetProxy = D60000000000000000000001;
+		};
 		B60000000000000000000002 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = A50000000000000000000001 /* PillsAlarm */;
@@ -346,6 +430,52 @@
 /* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
+		D90000000000000000000002 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = PillsAlarmControls/PillsAlarmControls.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 75;
+				DEVELOPMENT_TEAM = 69V6Z9TN5K;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PillsAlarmControls/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Pills Alarm";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks", );
+				MARKETING_VERSION = 0.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kolisko.pillcare.controls;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) PILLS_CONTROL_EXTENSION";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		D90000000000000000000003 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = PillsAlarmControls/PillsAlarmControls.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 75;
+				DEVELOPMENT_TEAM = 69V6Z9TN5K;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PillsAlarmControls/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Pills Alarm";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks", );
+				MARKETING_VERSION = 0.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kolisko.pillcare.controls;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) PILLS_CONTROL_EXTENSION";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 		A90000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -558,6 +688,12 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		D90000000000000000000001 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (D90000000000000000000002, D90000000000000000000003, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A90000000000000000000001 /* Build configuration list for PBXProject "PillsAlarm" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

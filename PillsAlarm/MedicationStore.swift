@@ -4,6 +4,8 @@ import PillCore
 
 @MainActor
 final class MedicationStore: ObservableObject {
+    static let shared = MedicationStore()
+
     enum LoadState: Equatable {
         case idle
         case loading

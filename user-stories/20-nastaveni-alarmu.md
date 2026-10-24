@@ -22,6 +22,20 @@ Pro zapnutí alarmů je potřeba iOS 26 nebo novější a oprávnění AlarmKit.
 ## Očekávaný výsledek
 Upozornění používají pouze AlarmKit, nebo jsou vypnutá. Nastavení platí jen pro toto zařízení; plány, potvrzení, sdílení a synchronizace se nemění. Aktualizace zachová zapnutý stav dosavadním uživatelům AlarmKitu. Nová instalace a původní režim lokálních notifikací začínají s alarmy vypnutými.
 
+## Ovládací centrum
+1. Na iOS 26 nebo novějším uživatel po aktualizaci jednou otevře Pills Alarm a přidá si ovladač `Alarmy Pills` do Ovládacího centra.
+2. Ovladač zobrazuje stejné zapnutí jako přepínač `AlarmKit` v nastavení aplikace. Změny v nastavení obnovují i stav ovladače.
+3. Vypnutí použije stejný plánovač v procesu aplikace a zruší všechny její alarmy včetně právě zvonících, budoucích a testovacích. Nevyžaduje načtení plánů z iCloudu a neotevírá obrazovku aplikace.
+4. Zapnutí ověří oprávnění AlarmKit a načte plány, pokud ještě nejsou dostupné v paměti aplikace. Naplánuje aktuální podání podle stávajících pravidel, neobnovuje starý testovací alarm.
+5. Při chybě načtení nebo oprávnění se vypnutý stav nezmění. Chyba plánování nebo rušení se vrátí systému; ovladač nesmí oznámit úspěch před dokončením operace.
+6. Souběžné pozdě dokončené zapnutí nesmí přebít novější vypnutí. Následná synchronizace ani návrat do aplikace vypnuté alarmy znovu nezapnou.
+
+Plány, potvrzení a CloudKit se nemění. Stávající lokální preference zůstává zdrojem pravdy. App Group `group.com.kolisko.pillcare.controls` obsahuje pouze kopii zapnutého/vypnutého stavu pro čtení rozšířením, nikoli zdravotní data. Při chybějícím stavu ovladač vyžádá otevření aplikace místo předstírání vypnutých alarmů. Při podpisu pro zařízení musí mít aplikace i rozšíření přidělenou tuto App Group.
+
+`AlarmControlTests` ověřují sdílené chování nastavení a ovladače, rušení alarmů, chyby a souběžné změny. Integrační test `testControlIntentCancelsRealRingingAndFutureAlarms` vyžaduje `PILLCARE_CONTROL_INTENT_TEST=1`, `PILLCARE_ALARM_BENCHMARK=1` a izolovaný simulátor s povoleným AlarmKitem a bez alarmů. Ověřuje produkční App Intent proti skutečnému zvonícímu a budoucímu alarmu, nikoli systémové doručení klepnutí do aplikace.
+
+Pro ruční kontrolu skutečného ovladače slouží `testActualControlTapCancelsRealAlarms` s `PILLCARE_CONTROL_UI_TEST=1` a `PILLCARE_ALARM_BENCHMARK=1`. Po naplánování je potřeba klepnout na ovladač v Ovládacím centru; test sám akci nevolá. Na fyzickém iPhonu je potřeba ověřit přidání ovladače, stav po změně v nastavení, vypnutí při zvonění i při ukončené aplikaci a opětovné zapnutí. Systém může vyžadovat odemknutí podle nastavení telefonu.
+
 ## Otevření aplikace z alarmu
 1. Uživatel naplánuje test za jednu minutu a přepne aplikaci na jinou záložku nebo ji přesune do pozadí.
 2. Běžící alarm nabídne vedle systémového zastavení tlačítko `Otevřít`.

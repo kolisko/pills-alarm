@@ -7,7 +7,7 @@ import PillCore
 
 @MainActor
 final class NotificationScheduler: ObservableObject {
-    static let shared = NotificationScheduler()
+    static let shared = NotificationScheduler(publishControlState: AlarmControlState.publish)
 
     private let defaults: UserDefaults
     private let alarmClient: any AlarmKitScheduling
@@ -15,6 +15,8 @@ final class NotificationScheduler: ObservableObject {
     private let removeLegacyNotifications: @MainActor () -> Void
     private var pendingOperation: Task<Void, Error>?
     private var operationID = UUID()
+    private var alarmStateChangeID = UUID()
+    private let publishControlState: @MainActor (Bool) -> Void
 
     @Published private(set) var lastScheduledCount = 0
     @Published private(set) var lastSchedulingDate: Date?
@@ -28,6 +30,7 @@ final class NotificationScheduler: ObservableObject {
     @Published private(set) var alarmsEnabled: Bool {
         didSet {
             defaults.set(alarmsEnabled, forKey: Self.alarmsEnabledKey)
+            publishControlState(alarmsEnabled)
         }
     }
     @Published var alarmSettings: AlarmSettings {
@@ -51,9 +54,11 @@ final class NotificationScheduler: ObservableObject {
         defaults: UserDefaults = .standard,
         alarmClient: (any AlarmKitScheduling)? = nil,
         alarmSounds: (any AlarmSoundProviding)? = nil,
-        removeLegacyNotifications: (@MainActor () -> Void)? = nil
+        removeLegacyNotifications: (@MainActor () -> Void)? = nil,
+        publishControlState: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         self.defaults = defaults
+        self.publishControlState = publishControlState
         let client = alarmClient ?? SystemAlarmKitClient()
         self.alarmClient = client
         self.alarmSounds = alarmSounds ?? AlarmAudioCache()
@@ -75,6 +80,7 @@ final class NotificationScheduler: ObservableObject {
             ?? (defaults.string(forKey: Self.legacyDeliveryMethodKey) == "alarmKit"))
         defaults.set(alarmsEnabled, forKey: Self.alarmsEnabledKey)
         defaults.removeObject(forKey: Self.legacyDeliveryMethodKey)
+        publishControlState(alarmsEnabled)
     }
 
     var isAlarmKitAvailable: Bool { alarmClient.isAvailable }
@@ -103,24 +109,49 @@ final class NotificationScheduler: ObservableObject {
         _ enabled: Bool,
         alarmGroups: @MainActor () -> [ScheduledDoseAlarmGroup]
     ) async {
-        guard !isChangingAlarmState else { return }
-        isChangingAlarmState = true
-        defer { isChangingAlarmState = false }
+        // The settings UI displays errors; system controls also need them returned to iOS.
+        try? await setAlarmsEnabledAndWait(enabled) { alarmGroups() }
+    }
 
-        removeLegacyNotifications()
-        if enabled {
-            do {
-                try await ensureAuthorization()
-            } catch {
-                lastSchedulingError = error.localizedDescription
-                return
+    func setAlarmsEnabledAndWait(
+        _ enabled: Bool,
+        alarmGroups: @MainActor () async throws -> [ScheduledDoseAlarmGroup]
+    ) async throws {
+        let changeID = UUID()
+        alarmStateChangeID = changeID
+        isChangingAlarmState = true
+        defer {
+            if alarmStateChangeID == changeID {
+                isChangingAlarmState = false
+                publishControlState(alarmsEnabled)
             }
         }
 
-        // Persist off before waiting for any in-flight request or cloud refresh.
-        alarmsEnabled = enabled
-        rescheduleAlarmGroups(enabled ? alarmGroups() : [])
-        await waitForPendingOperations()
+        removeLegacyNotifications()
+        do {
+            var groups: [ScheduledDoseAlarmGroup] = []
+            if enabled {
+                try await ensureAuthorization()
+                guard alarmStateChangeID == changeID else { throw CancellationError() }
+                groups = try await alarmGroups()
+            }
+            try Task.checkCancellation()
+            guard alarmStateChangeID == changeID else { throw CancellationError() }
+
+            // Persist off before waiting for any in-flight request or cloud refresh.
+            alarmsEnabled = enabled
+            rescheduleAlarmGroups(groups)
+            await waitForPendingOperations()
+            guard alarmStateChangeID == changeID else { throw CancellationError() }
+            if let lastSchedulingError {
+                throw AlarmStateChangeError(message: lastSchedulingError)
+            }
+        } catch {
+            if alarmStateChangeID == changeID, !(error is CancellationError) {
+                lastSchedulingError = error.localizedDescription
+            }
+            throw error
+        }
     }
 
     func rescheduleUpcomingDoses(store: MedicationStore) {
@@ -277,7 +308,7 @@ final class NotificationScheduler: ObservableObject {
         guard alarmClient.authorizationStatus.isUsable else { throw AlarmSchedulingError.alarmKitNotAuthorized }
     }
 
-    private func makeUpcomingDoseAlarmGroups(store: MedicationStore) -> [ScheduledDoseAlarmGroup] {
+    func makeUpcomingDoseAlarmGroups(store: MedicationStore) -> [ScheduledDoseAlarmGroup] {
         let alarms = AlarmSchedulingRules.upcomingAlarms(
             now: Date(),
             settings: alarmSettings,
@@ -404,6 +435,11 @@ final class NotificationScheduler: ObservableObject {
               let info = try? JSONDecoder().decode([StoredAlarmKitInfo].self, from: data) else { return [] }
         return info
     }
+}
+
+private struct AlarmStateChangeError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 @MainActor
