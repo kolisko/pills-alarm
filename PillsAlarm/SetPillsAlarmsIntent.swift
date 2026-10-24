@@ -1,6 +1,29 @@
 import AppIntents
 
 @available(iOS 26.0, *)
+struct SetPillsAlarmsMutedIntent: SetValueIntent, LiveActivityIntent {
+    static let title: LocalizedStringResource = "Ztlumit alarmy Pills"
+    static let isDiscoverable = false
+    static let openAppWhenRun = false
+    static var supportedModes: IntentModes { .background }
+
+    @Parameter(title: "Ztlumeno")
+    var value: Bool
+
+    init() {}
+
+    init(value: Bool) { self.value = value }
+
+    var alarmIntent: SetPillsAlarmsIntent { SetPillsAlarmsIntent(value: !value) }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        try await alarmIntent.perform()
+    }
+}
+
+// Preserve the enabled-value contract for actions iOS may still have cached from earlier versions.
+@available(iOS 26.0, *)
 struct SetPillsAlarmsIntent: SetValueIntent, LiveActivityIntent {
     static let title: LocalizedStringResource = "Alarmy Pills"
     static let isDiscoverable = false

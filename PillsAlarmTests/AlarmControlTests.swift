@@ -52,6 +52,48 @@ final class AlarmControlTests: XCTestCase {
         XCTAssertEqual(try AlarmControlState.currentValue(defaults: defaults), false)
     }
 
+    func testMuteControlInvertsOnlyTheIntentValue() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("Requires AlarmKit") }
+        XCTAssertFalse(SetPillsAlarmsMutedIntent(value: true).alarmIntent.value)
+        XCTAssertTrue(SetPillsAlarmsMutedIntent(value: false).alarmIntent.value)
+        XCTAssertTrue(SetPillsAlarmsIntent(value: true).value)
+        XCTAssertFalse(SetPillsAlarmsIntent(value: false).value)
+    }
+
+    func testBothStoredAlarmStatesSurviveControlInitialization() throws {
+        for enabled in [true, false] {
+            let defaults = isolatedDefaults()
+            let controlDefaults = isolatedDefaults()
+            defaults.set(enabled, forKey: NotificationScheduler.alarmsEnabledKey)
+            for _ in 0..<2 {
+                let scheduler = NotificationScheduler(
+                    defaults: defaults, alarmClient: FakeAlarmKitClient(), removeLegacyNotifications: {},
+                    publishControlState: { controlDefaults.set($0, forKey: AlarmControlState.enabledKey) }
+                )
+                XCTAssertEqual(scheduler.alarmsEnabled, enabled)
+                XCTAssertEqual(defaults.bool(forKey: NotificationScheduler.alarmsEnabledKey), enabled)
+                XCTAssertEqual(try AlarmControlState.currentValue(defaults: controlDefaults), enabled)
+            }
+        }
+    }
+
+    func testMuteControlRequestsUseExistingSchedulerInBothDirections() async throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("Requires AlarmKit") }
+        let (scheduler, client) = fixture(enabled: true)
+        client.addExisting(id: UUID())
+        try await scheduler.setAlarmsEnabledAndWait(SetPillsAlarmsMutedIntent(value: true).alarmIntent.value) {
+            XCTFail("Muting must not load plans")
+            return []
+        }
+        XCTAssertFalse(scheduler.alarmsEnabled)
+        XCTAssertTrue(client.records.isEmpty)
+        try await scheduler.setAlarmsEnabledAndWait(SetPillsAlarmsMutedIntent(value: false).alarmIntent.value) {
+            [self.group()]
+        }
+        XCTAssertTrue(scheduler.alarmsEnabled)
+        XCTAssertEqual(client.records.count, 1)
+    }
+
     func testExistingPreferenceIsPublishedWithoutChangingOtherSettings() async throws {
         let defaults = isolatedDefaults()
         defaults.set(true, forKey: NotificationScheduler.alarmsEnabledKey)
@@ -245,7 +287,7 @@ final class AlarmControlTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(200))
             }
             XCTAssertTrue(try AlarmManager.shared.alarms.contains { $0.state == .alerting })
-            _ = try await SetPillsAlarmsIntent(value: false).perform()
+            _ = try await SetPillsAlarmsMutedIntent(value: true).perform()
             XCTAssertFalse(scheduler.alarmsEnabled)
             XCTAssertTrue(try AlarmManager.shared.alarms.isEmpty)
             XCTAssertEqual(try AlarmControlState.currentValue(), false)
