@@ -1,10 +1,48 @@
 import AlarmKit
 import XCTest
 import PillCore
+import UIKit
 @testable import PillsAlarm
 
 @MainActor
 final class AlarmControlTests: XCTestCase {
+    func testControlSymbolsAreBundledAndHaveDistinctStates() throws {
+        let plugins = try XCTUnwrap(Bundle.main.builtInPlugInsURL)
+        let controls = try XCTUnwrap(Bundle(url: plugins.appendingPathComponent("PillsAlarmControls.appex")))
+        let on = try XCTUnwrap(UIImage(named: "PillsAlarmsOn", in: controls, compatibleWith: nil))
+        let off = try XCTUnwrap(UIImage(named: "PillsAlarmsOff", in: controls, compatibleWith: nil))
+        XCTAssertTrue(on.isSymbolImage)
+        XCTAssertTrue(off.isSymbolImage)
+        let weights: [UIImage.SymbolWeight] = [.ultraLight, .thin, .light, .regular, .medium, .semibold, .bold, .heavy, .black]
+        let scales: [UIImage.SymbolScale] = [.small, .medium, .large]
+        for size: CGFloat in [20, 32, 64] {
+            for weight in weights {
+                for scale in scales {
+                    let configuration = UIImage.SymbolConfiguration(pointSize: size, weight: weight, scale: scale)
+                    let onImage = try XCTUnwrap(on.applyingSymbolConfiguration(configuration))
+                    let offImage = try XCTUnwrap(off.applyingSymbolConfiguration(configuration))
+                    XCTAssertTrue(onImage.isSymbolImage)
+                    XCTAssertTrue(offImage.isSymbolImage)
+                    XCTAssertGreaterThan(onImage.size.width, 0)
+                    XCTAssertGreaterThan(offImage.size.height, 0)
+                    XCTAssertEqual(onImage.size.width, offImage.size.width, accuracy: 0.5)
+                    XCTAssertEqual(onImage.size.height, offImage.size.height, accuracy: 0.5)
+                    let onAlignment = CGRect(origin: .zero, size: onImage.size).inset(by: onImage.alignmentRectInsets)
+                    let offAlignment = CGRect(origin: .zero, size: offImage.size).inset(by: offImage.alignmentRectInsets)
+                    let pixel = 1 / onImage.scale
+                    XCTAssertEqual(onAlignment.minX, offAlignment.minX, accuracy: pixel)
+                    XCTAssertEqual(onAlignment.minY, offAlignment.minY, accuracy: pixel)
+                    XCTAssertEqual(onAlignment.width, offAlignment.width, accuracy: pixel)
+                    XCTAssertEqual(onAlignment.height, offAlignment.height, accuracy: pixel)
+                    // Exclude the lower-right bell from the tablet's optical alignment.
+                    XCTAssertGreaterThan(onImage.alignmentRectInsets.right, onImage.alignmentRectInsets.left)
+                    XCTAssertLessThan(onImage.alignmentRectInsets.top, onImage.alignmentRectInsets.bottom)
+                    XCTAssertNotEqual(try XCTUnwrap(onImage.pngData()), try XCTUnwrap(offImage.pngData()))
+                }
+            }
+        }
+    }
+
     func testMissingControlStateDoesNotPretendAlarmsAreOff() {
         let defaults = isolatedDefaults()
         XCTAssertThrowsError(try AlarmControlState.currentValue(defaults: defaults))

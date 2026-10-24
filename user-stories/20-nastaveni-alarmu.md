@@ -25,6 +25,7 @@ Upozornění používají pouze AlarmKit, nebo jsou vypnutá. Nastavení platí 
 ## Ovládací centrum
 1. Na iOS 26 nebo novějším uživatel po aktualizaci jednou otevře Pills Alarm a přidá si ovladač `Alarmy Pills` do Ovládacího centra.
 2. Ovladač zobrazuje stejné zapnutí jako přepínač `AlarmKit` v nastavení aplikace. Změny v nastavení obnovují i stav ovladače.
+   Ikona je kulatá tableta s malým zvonkem; ve vypnutém stavu je přeškrtnutý pouze zvonek. Rýha tablety vede opačným směrem než přeškrtnutí, aby byly oba stavy rozeznatelné i bez barvy. Optický střed odpovídá samotné tabletě; zvonek vyčnívá vpravo dole a nemění zarovnání. Oba vlastní vektorové symboly jsou součástí rozšíření ve formátu SF Symbols 3 s optickými okraji pro všechny velikosti a řezy. Jejich zdroj se regeneruje příkazem `swift Tools/generate-alarm-control-symbols.swift` z kořene projektu.
 3. Vypnutí použije stejný plánovač v procesu aplikace a zruší všechny její alarmy včetně právě zvonících, budoucích a testovacích. Nevyžaduje načtení plánů z iCloudu a neotevírá obrazovku aplikace.
 4. Zapnutí ověří oprávnění AlarmKit a načte plány, pokud ještě nejsou dostupné v paměti aplikace. Naplánuje aktuální podání podle stávajících pravidel, neobnovuje starý testovací alarm.
 5. Při chybě načtení nebo oprávnění se vypnutý stav nezmění. Chyba plánování nebo rušení se vrátí systému; ovladač nesmí oznámit úspěch před dokončením operace.

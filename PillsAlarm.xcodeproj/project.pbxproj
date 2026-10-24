@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D10000000000000000000010 /* Controls Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000010; };
 		D10000000000000000000008 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000008; };
 		D10000000000000000000009 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000009; };
 		D10000000000000000000001 /* AlarmControlState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
@@ -80,6 +81,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D20000000000000000000010 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D20000000000000000000008 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		D20000000000000000000009 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		D20000000000000000000001 /* AlarmControlState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmControlState.swift; sourceTree = "<group>"; };
@@ -147,7 +149,7 @@
 /* Begin PBXGroup section */
 		D40000000000000000000001 /* PillsAlarmControls */ = {
 			isa = PBXGroup;
-			children = (D20000000000000000000003, D20000000000000000000004, D20000000000000000000005, D20000000000000000000009, );
+			children = (D20000000000000000000003, D20000000000000000000004, D20000000000000000000005, D20000000000000000000009, D20000000000000000000010, );
 			path = PillsAlarmControls;
 			sourceTree = "<group>";
 		};
@@ -327,7 +329,7 @@
 		D70000000000000000000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (D10000000000000000000009, );
+			files = (D10000000000000000000009, D10000000000000000000010, );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A80000000000000000000001 /* Resources */ = {

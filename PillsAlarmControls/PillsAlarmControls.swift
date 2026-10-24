@@ -13,7 +13,7 @@ struct PillsAlarmsControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: AlarmControlState.kind, provider: Provider()) { enabled in
             ControlWidgetToggle("Alarmy Pills", isOn: enabled, action: SetPillsAlarmsIntent()) { isOn in
-                Label(isOn ? "Zapnuté" : "Vypnuté", systemImage: isOn ? "bell.fill" : "bell.slash.fill")
+                Label(isOn ? "Zapnuté" : "Vypnuté", image: isOn ? .pillsAlarmsOn : .pillsAlarmsOff)
             }
             .tint(.teal)
         }
