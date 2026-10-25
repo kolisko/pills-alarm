@@ -18,7 +18,9 @@ struct SetPillsAlarmsMutedIntent: SetValueIntent, LiveActivityIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        try await alarmIntent.perform()
+        try await AlarmControlDiagnostics.withIntentAttempt(enabled: !value, intent: "SetPillsAlarmsMutedIntent") {
+            try await alarmIntent.perform()
+        }
     }
 }
 
@@ -39,7 +41,9 @@ struct SetPillsAlarmsIntent: SetValueIntent, LiveActivityIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        try await apply()
+        try await AlarmControlDiagnostics.withIntentAttempt(enabled: value, intent: "SetPillsAlarmsIntent") {
+            try await apply()
+        }
         return .result()
     }
 
@@ -47,13 +51,17 @@ struct SetPillsAlarmsIntent: SetValueIntent, LiveActivityIntent {
     private func apply() async throws {
 #if PILLS_CONTROL_EXTENSION
         // LiveActivityIntent routes execution to the app, which owns the AlarmKit alarms.
+        AlarmControlDiagnostics.record(.wrongProcess)
         throw AlarmControlError.openAppFirst
 #else
         try await NotificationScheduler.shared.setAlarmsEnabledAndWait(value) {
             let store = MedicationStore.shared
+            AlarmControlDiagnostics.record(.plansBegin, fields: ["loadState": store.loadState.diagnosticName])
             if store.loadState != .ready {
                 await store.reload(showSyncIndicator: false)
             }
+            AlarmControlDiagnostics.record(.plansEnd, fields: ["loadState": store.loadState.diagnosticName,
+                "medications": "\(store.medicationItems.count)", "confirmations": "\(store.confirmations.count)"])
             guard store.loadState == .ready else { throw AlarmControlError.plansUnavailable }
             return NotificationScheduler.shared.makeUpcomingDoseAlarmGroups(store: store)
         }

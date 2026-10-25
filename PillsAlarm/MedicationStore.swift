@@ -13,6 +13,17 @@ final class MedicationStore: ObservableObject {
         case requiresICloudAccount(String)
         case missingGroup
         case failed(String)
+
+        var diagnosticName: String {
+            switch self {
+            case .idle: "idle"
+            case .loading: "loading"
+            case .ready: "ready"
+            case .requiresICloudAccount: "requiresICloudAccount"
+            case .missingGroup: "missingGroup"
+            case .failed: "failed"
+            }
+        }
     }
 
     @Published private(set) var loadState: LoadState = .idle
@@ -127,6 +138,10 @@ final class MedicationStore: ObservableObject {
     }
 
     func reload(showSyncIndicator: Bool = true, forceFullRecovery: Bool = false) async {
+        AlarmControlDiagnostics.record(.cloudBegin, fields: ["loadState": loadState.diagnosticName])
+        defer {
+            AlarmControlDiagnostics.record(.cloudEnd, fields: ["loadState": loadState.diagnosticName])
+        }
         if showSyncIndicator {
             beginSync()
         }
@@ -145,6 +160,7 @@ final class MedicationStore: ObservableObject {
 
         do {
             let accountStatus = try await cloud.accountStatus()
+            AlarmControlDiagnostics.record(.cloudAccount, fields: ["status": "\(accountStatus.rawValue)"])
             guard generation == loadGeneration else { return }
 
             guard accountStatus == .available else {
@@ -154,9 +170,11 @@ final class MedicationStore: ObservableObject {
             }
 
             currentUserRecordName = try await cloud.currentUserRecordName()
+            AlarmControlDiagnostics.record(.cloudUser)
             guard generation == loadGeneration else { return }
 
             try await cloud.ensurePrivateZone()
+            AlarmControlDiagnostics.record(.cloudZone)
             guard generation == loadGeneration else { return }
 
             let requestedMode: WorkspaceSyncMode
@@ -169,11 +187,13 @@ final class MedicationStore: ObservableObject {
             }
             let syncResult = try await loadWorkspaceSnapshots(mode: requestedMode)
             let resolvedSnapshots = syncResult.snapshots
+            AlarmControlDiagnostics.record(.cloudSnapshots, fields: ["workspaces": "\(resolvedSnapshots.count)"])
 
             guard generation == loadGeneration else { return }
 
             if syncResult.shouldRepairShareHierarchy {
                 try await cloud.repairShareHierarchy(for: resolvedSnapshots)
+                AlarmControlDiagnostics.record(.cloudRepair)
                 guard generation == loadGeneration else { return }
             }
 
@@ -200,6 +220,7 @@ final class MedicationStore: ObservableObject {
 
             guard generation == loadGeneration else { return }
 
+            AlarmControlDiagnostics.record(.cloudSubscriptions, fields: ["error": subscriptionError.map(AlarmControlDiagnostics.errorCode) ?? "none"])
             loadState = .ready
             if let subscriptionError {
                 recordSyncError(subscriptionError)
@@ -210,6 +231,7 @@ final class MedicationStore: ObservableObject {
                 NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
             }
         } catch {
+            AlarmControlDiagnostics.record(.cloudFailed, fields: ["error": AlarmControlDiagnostics.errorCode(error)])
             fail(error)
         }
     }

@@ -162,6 +162,14 @@ struct AlarmAuditView: View {
                     }
                 }
             }
+
+            Section {
+                NavigationLink {
+                    AlarmControlDiagnosticsView()
+                } label: {
+                    Label("Diagnostika ovládacího prvku", systemImage: "list.bullet.rectangle")
+                }
+            }
         }
         .navigationTitle("Alarmy")
         .refreshable {

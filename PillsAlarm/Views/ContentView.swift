@@ -421,6 +421,17 @@ private struct ICloudAccountRequiredView: View {
             .padding(28)
             .navigationTitle("iCloud")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        AlarmControlDiagnosticsView()
+                    } label: {
+                        Image(systemName: "list.bullet.rectangle")
+                    }
+                    .accessibilityLabel("Diagnostika ovládacího prvku")
+                    .help("Diagnostika ovládacího prvku")
+                }
+            }
         }
     }
 }

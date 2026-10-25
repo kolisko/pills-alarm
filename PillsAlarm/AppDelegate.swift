@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        AlarmControlDiagnostics.record(.appLaunch, fields: [
+            "applicationState": "\(application.applicationState.rawValue)",
+            "protectedDataAvailable": "\(application.isProtectedDataAvailable)"
+        ], always: true)
         NotificationScheduler.shared.restoreAlarmState()
         application.registerForRemoteNotifications()
         return true

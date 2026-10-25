@@ -131,7 +131,9 @@ final class NotificationScheduler: ObservableObject {
         do {
             var groups: [ScheduledDoseAlarmGroup] = []
             if enabled {
+                AlarmControlDiagnostics.record(.authorizationBegin, fields: ["status": String(describing: alarmClient.authorizationStatus)])
                 try await ensureAuthorization()
+                AlarmControlDiagnostics.record(.authorizationEnd, fields: ["status": String(describing: alarmClient.authorizationStatus)])
                 guard alarmStateChangeID == changeID else { throw CancellationError() }
                 groups = try await alarmGroups()
             }
@@ -140,6 +142,7 @@ final class NotificationScheduler: ObservableObject {
 
             // Persist off before waiting for any in-flight request or cloud refresh.
             alarmsEnabled = enabled
+            AlarmControlDiagnostics.record(.stateSaved, fields: ["enabled": "\(alarmsEnabled)", "groups": "\(groups.count)"])
             rescheduleAlarmGroups(groups)
             await waitForPendingOperations()
             guard alarmStateChangeID == changeID else { throw CancellationError() }
@@ -162,6 +165,7 @@ final class NotificationScheduler: ObservableObject {
     func rescheduleAlarmGroups(_ alarmGroups: [ScheduledDoseAlarmGroup]) -> Task<Void, Error> {
         removeLegacyNotifications()
         return enqueueOperation {
+            AlarmControlDiagnostics.record(.schedulingBegin, fields: ["enabled": "\(self.alarmsEnabled)", "groups": "\(alarmGroups.count)"])
             guard self.alarmsEnabled else {
                 try self.cancelAllAlarmKitAlarms()
                 self.lastScheduledCount = 0
@@ -283,7 +287,15 @@ final class NotificationScheduler: ObservableObject {
                     self.lastSchedulingDate = Date()
                     self.lastSchedulingError = nil
                 }
+                if AlarmControlDiagnostics.attemptID != nil {
+                    AlarmControlDiagnostics.record(.schedulingEnd, fields: ["operation": id.uuidString,
+                        "isCurrent": "\(self.operationID == id)", "enabled": "\(self.alarmsEnabled)",
+                        "scheduledCount": "\(self.lastScheduledCount)",
+                        "systemCount": "\((try? self.alarmClient.alarms().count).map(String.init) ?? "unavailable")"])
+                }
             } catch {
+                AlarmControlDiagnostics.record(error is CancellationError ? .schedulingCancelled : .schedulingFailed,
+                    fields: ["operation": id.uuidString, "error": AlarmControlDiagnostics.errorCode(error)])
                 if !(error is CancellationError), self.operationID == id {
                     self.lastScheduledCount = (try? self.alarmClient.alarms().filter { $0.id != Self.alarmKitTestID }.count) ?? 0
                     self.lastSchedulingDate = Date()
