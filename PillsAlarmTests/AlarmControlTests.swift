@@ -11,8 +11,10 @@ final class AlarmControlTests: XCTestCase {
         let controls = try XCTUnwrap(Bundle(url: plugins.appendingPathComponent("PillsAlarmControls.appex")))
         let on = try XCTUnwrap(UIImage(named: "PillsAlarmsOn", in: controls, compatibleWith: nil))
         let off = try XCTUnwrap(UIImage(named: "PillsAlarmsOff", in: controls, compatibleWith: nil))
+        let pending = try XCTUnwrap(UIImage(named: "PillsAlarmsPending", in: controls, compatibleWith: nil))
         XCTAssertTrue(on.isSymbolImage)
         XCTAssertTrue(off.isSymbolImage)
+        XCTAssertTrue(pending.isSymbolImage)
         let weights: [UIImage.SymbolWeight] = [.ultraLight, .thin, .light, .regular, .medium, .semibold, .bold, .heavy, .black]
         let scales: [UIImage.SymbolScale] = [.small, .medium, .large]
         for size: CGFloat in [20, 32, 64] {
@@ -20,27 +22,48 @@ final class AlarmControlTests: XCTestCase {
                 for scale in scales {
                     let configuration = UIImage.SymbolConfiguration(pointSize: size, weight: weight, scale: scale)
                     let onImage = try XCTUnwrap(on.applyingSymbolConfiguration(configuration))
-                    let offImage = try XCTUnwrap(off.applyingSymbolConfiguration(configuration))
                     XCTAssertTrue(onImage.isSymbolImage)
-                    XCTAssertTrue(offImage.isSymbolImage)
                     XCTAssertGreaterThan(onImage.size.width, 0)
-                    XCTAssertGreaterThan(offImage.size.height, 0)
-                    XCTAssertEqual(onImage.size.width, offImage.size.width, accuracy: 0.5)
-                    XCTAssertEqual(onImage.size.height, offImage.size.height, accuracy: 0.5)
                     let onAlignment = CGRect(origin: .zero, size: onImage.size).inset(by: onImage.alignmentRectInsets)
-                    let offAlignment = CGRect(origin: .zero, size: offImage.size).inset(by: offImage.alignmentRectInsets)
                     let pixel = 1 / onImage.scale
-                    XCTAssertEqual(onAlignment.minX, offAlignment.minX, accuracy: pixel)
-                    XCTAssertEqual(onAlignment.minY, offAlignment.minY, accuracy: pixel)
-                    XCTAssertEqual(onAlignment.width, offAlignment.width, accuracy: pixel)
-                    XCTAssertEqual(onAlignment.height, offAlignment.height, accuracy: pixel)
-                    // Exclude the lower-right bell from the tablet's optical alignment.
-                    XCTAssertGreaterThan(onImage.alignmentRectInsets.right, onImage.alignmentRectInsets.left)
-                    XCTAssertLessThan(onImage.alignmentRectInsets.top, onImage.alignmentRectInsets.bottom)
-                    XCTAssertNotEqual(try XCTUnwrap(onImage.pngData()), try XCTUnwrap(offImage.pngData()))
+                    var renderedStates = Set<Data>([try XCTUnwrap(onImage.pngData())])
+                    for symbol in [off, pending] {
+                        let image = try XCTUnwrap(symbol.applyingSymbolConfiguration(configuration))
+                        XCTAssertTrue(image.isSymbolImage)
+                        XCTAssertGreaterThan(image.size.height, 0)
+                        XCTAssertEqual(onImage.size.width, image.size.width, accuracy: 0.5)
+                        XCTAssertEqual(onImage.size.height, image.size.height, accuracy: 0.5)
+                        let alignment = CGRect(origin: .zero, size: image.size).inset(by: image.alignmentRectInsets)
+                        XCTAssertEqual(onAlignment.minX, alignment.minX, accuracy: pixel)
+                        XCTAssertEqual(onAlignment.minY, alignment.minY, accuracy: pixel)
+                        XCTAssertEqual(onAlignment.width, alignment.width, accuracy: pixel)
+                        XCTAssertEqual(onAlignment.height, alignment.height, accuracy: pixel)
+                        // Exclude the lower-right bell from the tablet's optical alignment.
+                        XCTAssertGreaterThan(image.alignmentRectInsets.right, image.alignmentRectInsets.left)
+                        XCTAssertLessThan(image.alignmentRectInsets.top, image.alignmentRectInsets.bottom)
+                        XCTAssertTrue(renderedStates.insert(try XCTUnwrap(image.pngData())).inserted,
+                                      "Every control state must have a distinct symbol")
+                    }
                 }
             }
         }
+        let preview = UIGraphicsImageRenderer(size: CGSize(width: 480, height: 360)).image { context in
+            UIColor.darkGray.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 480, height: 360))
+            for (row, size) in [CGFloat(20), 32, 64].enumerated() {
+                for (column, symbol) in [on, off, pending].enumerated() {
+                    let image = symbol.applyingSymbolConfiguration(.init(pointSize: size, weight: .regular))!
+                        .withTintColor(.white, renderingMode: .alwaysOriginal)
+                    let alignment = CGRect(origin: .zero, size: image.size).inset(by: image.alignmentRectInsets)
+                    image.draw(at: CGPoint(x: CGFloat(column * 160 + 70) - alignment.midX,
+                                           y: CGFloat(row * 120 + 50) - alignment.midY))
+                }
+            }
+        }
+        let attachment = XCTAttachment(image: preview)
+        attachment.name = "Control symbols - on, off, pending at 20, 32, 64 pt"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     func testMissingControlStateDoesNotPretendAlarmsAreOff() {
@@ -60,10 +83,8 @@ final class AlarmControlTests: XCTestCase {
         XCTAssertFalse(SetPillsAlarmsIntent(value: false).value)
     }
 
-    func testIntermediateAndRecoverySymbolsExist() {
-        for name in ["hourglass", "exclamationmark.arrow.triangle.2.circlepath"] {
-            XCTAssertNotNil(UIImage(systemName: name), name)
-        }
+    func testRecoverySymbolExists() {
+        XCTAssertNotNil(UIImage(systemName: "exclamationmark.arrow.triangle.2.circlepath"))
     }
 
     func testNativeOptimisticToggleShowsPendingInsteadOfUnconfirmedSuccess() {

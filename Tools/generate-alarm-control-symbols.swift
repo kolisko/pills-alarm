@@ -9,7 +9,13 @@ func line(_ start: CGPoint, _ end: CGPoint, width: CGFloat) -> CGPath {
     return path.copy(strokingWithWidth: width, lineCap: .round, lineJoin: .round, miterLimit: 10)
 }
 
-func paths(enabled: Bool) -> [CGPath] {
+enum State: String, CaseIterable {
+    case on = "PillsAlarmsOn"
+    case off = "PillsAlarmsOff"
+    case pending = "PillsAlarmsPending"
+}
+
+func paths(state: State) -> [CGPath] {
     let tablet = CGPath(ellipseIn: CGRect(x: 1, y: 3, width: 25, height: 25), transform: nil)
     // The tablet score slopes up; the muted bell's slash slopes down.
     let score = line(CGPoint(x: 7.49, y: 21.51), CGPoint(x: 19.51, y: 9.49), width: 2)
@@ -29,7 +35,20 @@ func paths(enabled: Bool) -> [CGPath] {
     bell.addCurve(to: CGPoint(x: 28.3, y: 31.8), control1: CGPoint(x: 26.2, y: 33), control2: CGPoint(x: 27.8, y: 33))
     let outline = bell.copy(strokingWithWidth: 1.5, lineCap: .round, lineJoin: .round, miterLimit: 10)
     let body = tablet.subtracting(score).subtracting(badge)
-    guard !enabled else { return [body, outline] }
+    if state == .on { return [body, outline] }
+    if state == .pending {
+        let question = CGMutablePath()
+        question.move(to: CGPoint(x: 25.7, y: 22))
+        question.addCurve(to: CGPoint(x: 28.6, y: 19.9), control1: CGPoint(x: 25.9, y: 20.6), control2: CGPoint(x: 27, y: 19.9))
+        question.addCurve(to: CGPoint(x: 31.3, y: 22.3), control1: CGPoint(x: 30.3, y: 19.9), control2: CGPoint(x: 31.3, y: 20.8))
+        question.addCurve(to: CGPoint(x: 29.6, y: 24.8), control1: CGPoint(x: 31.3, y: 23.5), control2: CGPoint(x: 30.5, y: 24.1))
+        question.addCurve(to: CGPoint(x: 28.6, y: 26.8), control1: CGPoint(x: 28.8, y: 25.4), control2: CGPoint(x: 28.6, y: 25.9))
+        let mark = question.copy(strokingWithWidth: 1.6, lineCap: .round, lineJoin: .round, miterLimit: 10)
+        let clearance = question.copy(strokingWithWidth: 3.6, lineCap: .round, lineJoin: .round, miterLimit: 10)
+        let dot = CGPath(ellipseIn: CGRect(x: 27.7, y: 28.7, width: 1.8, height: 1.8), transform: nil)
+        let dotClearance = CGPath(ellipseIn: CGRect(x: 26.7, y: 27.7, width: 3.8, height: 3.8), transform: nil)
+        return [body, outline.subtracting(clearance).subtracting(dotClearance), mark, dot]
+    }
     let start = CGPoint(x: 20.5, y: 19.5)
     let end = CGPoint(x: 32.45, y: 31.45)
     return [body, outline.subtracting(line(start, end, width: 3.2)), line(start, end, width: 1.6)]
@@ -59,9 +78,9 @@ func svgPath(_ path: CGPath) -> String {
 }
 
 let catalog = URL(fileURLWithPath: "PillsAlarmControls/Assets.xcassets", isDirectory: true)
-for enabled in [true, false] {
-    let name = enabled ? "PillsAlarmsOn" : "PillsAlarmsOff"
-    let outlines = paths(enabled: enabled).map { "      <path d=\"\(svgPath($0))\"/>" }.joined(separator: "\n")
+for state in State.allCases {
+    let name = state.rawValue
+    let outlines = paths(state: state).map { "      <path d=\"\(svgPath($0))\"/>" }.joined(separator: "\n")
     // Control Center requests its own weight and scale; export every static slot.
     let weights = ["Ultralight", "Thin", "Light", "Regular", "Medium", "Semibold", "Bold", "Heavy", "Black"]
     let scales: [(String, CGFloat)] = [("S", 0.783), ("M", 1), ("L", 1.29)]

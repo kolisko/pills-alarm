@@ -28,7 +28,7 @@ struct PillsAlarmsControl: ControlWidget {
     }
 
     private func symbol(for state: AlarmControlSnapshot, isMuted: Bool) -> Image {
-        if state.pendingTarget(isMuted: isMuted) != nil { return Image(systemName: "hourglass") }
+        if state.pendingTarget(isMuted: isMuted) != nil { return Image(.pillsAlarmsPending) }
         if state.needsRecovery { return Image(systemName: "exclamationmark.arrow.triangle.2.circlepath") }
         return Image(isMuted ? .pillsAlarmsOff : .pillsAlarmsOn)
     }
