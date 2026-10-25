@@ -54,15 +54,22 @@ struct SetPillsAlarmsIntent: SetValueIntent, LiveActivityIntent {
         AlarmControlDiagnostics.record(.wrongProcess)
         throw AlarmControlError.openAppFirst
 #else
-        try await NotificationScheduler.shared.setAlarmsEnabledAndWait(value) {
-            let store = MedicationStore.shared
-            AlarmControlDiagnostics.record(.plansBegin, fields: ["loadState": store.loadState.diagnosticName])
-            defer {
-                AlarmControlDiagnostics.record(.plansEnd, fields: ["loadState": store.loadState.diagnosticName,
-                    "medications": "\(store.medicationItems.count)", "confirmations": "\(store.confirmations.count)"])
+        let scheduler = NotificationScheduler.shared
+        guard !scheduler.isChangingAlarmState else { throw AlarmControlError.changeInProgress }
+        let initialEnabled = scheduler.alarmsEnabled
+        try await AlarmControlState.store.withChange(to: value, currentEnabled: initialEnabled, finalEnabled: {
+            scheduler.isChangingAlarmState ? initialEnabled : scheduler.alarmsEnabled
+        }) {
+            try await scheduler.setAlarmsEnabledAndWait(value) {
+                let store = MedicationStore.shared
+                AlarmControlDiagnostics.record(.plansBegin, fields: ["loadState": store.loadState.diagnosticName])
+                defer {
+                    AlarmControlDiagnostics.record(.plansEnd, fields: ["loadState": store.loadState.diagnosticName,
+                        "medications": "\(store.medicationItems.count)", "confirmations": "\(store.confirmations.count)"])
+                }
+                try await store.ensurePlansLoaded()
+                return scheduler.makeUpcomingDoseAlarmGroups(store: store)
             }
-            try await store.ensurePlansLoaded()
-            return NotificationScheduler.shared.makeUpcomingDoseAlarmGroups(store: store)
         }
 #endif
     }

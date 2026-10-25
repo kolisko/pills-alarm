@@ -60,6 +60,229 @@ final class AlarmControlTests: XCTestCase {
         XCTAssertFalse(SetPillsAlarmsIntent(value: false).value)
     }
 
+    func testIntermediateAndRecoverySymbolsExist() {
+        for name in ["hourglass", "exclamationmark.arrow.triangle.2.circlepath"] {
+            XCTAssertNotNil(UIImage(systemName: name), name)
+        }
+    }
+
+    func testNativeOptimisticToggleShowsPendingInsteadOfUnconfirmedSuccess() {
+        for enabled in [false, true] {
+            let state = AlarmControlSnapshot(enabled: enabled)
+            XCTAssertNil(state.pendingTarget(isMuted: !enabled))
+            XCTAssertEqual(state.displayedStatus(isMuted: !enabled), enabled ? "Zapnuté" : "Vypnuté")
+            XCTAssertEqual(state.pendingTarget(isMuted: enabled), !enabled)
+            XCTAssertEqual(state.displayedStatus(isMuted: enabled), enabled ? "Vypínání…" : "Zapínání…")
+            let running = AlarmControlSnapshot(enabled: enabled,
+                change: .init(id: UUID(), requestedEnabled: !enabled, startedAt: Date()))
+            for isMuted in [false, true] {
+                XCTAssertEqual(running.pendingTarget(isMuted: isMuted), !enabled)
+                XCTAssertEqual(running.displayedStatus(isMuted: isMuted), enabled ? "Vypínání…" : "Zapínání…")
+            }
+        }
+    }
+
+    func testSnapshotAdoptsLegacyStateAndDoesNotReloadOnUnchangedStartup() throws {
+        for enabled in [false, true] {
+            let defaults = isolatedDefaults()
+            defaults.set(enabled, forKey: AlarmControlState.enabledKey)
+            var reloads = 0
+            let store = controlStore(defaults: defaults) { reloads += 1 }
+            XCTAssertEqual(try store.snapshot(), AlarmControlSnapshot(enabled: enabled))
+            store.publish(enabled)
+            store.publish(enabled)
+            XCTAssertEqual(reloads, 0)
+            store.publish(!enabled)
+            XCTAssertEqual(reloads, 1)
+            XCTAssertEqual(try store.snapshot().enabled, !enabled)
+        }
+    }
+
+    func testPendingStateRetainsConfirmedValueAndSurvivesStartupPublication() throws {
+        for enabled in [false, true] {
+            var reloads = 0
+            let store = controlStore { reloads += 1 }
+            store.publish(enabled)
+            let lease = try store.beginChange(to: !enabled, currentEnabled: enabled)
+            let pending = try store.snapshot()
+            XCTAssertTrue(pending.isChanging)
+            XCTAssertEqual(pending.enabled, enabled)
+            XCTAssertEqual(pending.change?.requestedEnabled, !enabled)
+            XCTAssertEqual(pending.status, enabled ? "Vypínání…" : "Zapínání…")
+            XCTAssertEqual(reloads, 2, "Pending must refresh even though the confirmed Bool did not change")
+            store.publish(enabled)
+            store.publish(!enabled)
+            XCTAssertEqual(try store.snapshot(), pending)
+            XCTAssertEqual(reloads, 2, "Neither startup nor scheduling may overwrite the active operation")
+            store.finishChange(lease, enabled: !enabled)
+            XCTAssertEqual(try store.snapshot(), AlarmControlSnapshot(enabled: !enabled))
+            XCTAssertEqual(reloads, 3)
+        }
+    }
+
+    func testOperationLockRejectsDuplicateFromAnotherStore() throws {
+        let defaults = isolatedDefaults()
+        let url = isolatedLockURL()
+        let app = AlarmControlStateStore(defaults: defaults, lockURL: url, reload: {})
+        let other = AlarmControlStateStore(defaults: defaults, lockURL: url, reload: {})
+        let lease = try app.beginChange(to: true, currentEnabled: false)
+        XCTAssertEqual(try app.snapshot(), try other.snapshot())
+        XCTAssertThrowsError(try other.beginChange(to: false, currentEnabled: false)) { error in
+            XCTAssertEqual(error.localizedDescription, AlarmControlError.changeInProgress.localizedDescription)
+        }
+        try withExtendedLifetime(lease) { XCTAssertTrue(try other.snapshot().isChanging) }
+    }
+
+    func testAbandonedOperationBecomesRetryableWithoutOverwritingSnapshot() throws {
+        let defaults = isolatedDefaults()
+        let store = controlStore(defaults: defaults)
+        var lease: AlarmControlStateStore.ChangeLease? = try store.beginChange(to: true, currentEnabled: false)
+        XCTAssertNotNil(lease)
+        XCTAssertTrue(try store.snapshot().isChanging)
+        let saved = defaults.data(forKey: AlarmControlStateStore.snapshotKey)
+        lease = nil // Models the file descriptor being closed when the app process exits.
+        let abandoned = try store.snapshot()
+        XCTAssertFalse(abandoned.isChanging)
+        XCTAssertFalse(abandoned.enabled)
+        XCTAssertTrue(abandoned.needsRecovery)
+        XCTAssertEqual(abandoned.status, "Změna nedokončena")
+        XCTAssertEqual(saved, defaults.data(forKey: AlarmControlStateStore.snapshotKey), "Provider recovery is read-only")
+        let retry = try store.beginChange(to: true, currentEnabled: false)
+        XCTAssertTrue(try store.snapshot().isChanging)
+        store.finishChange(retry, enabled: true)
+        XCTAssertEqual(try store.snapshot(), AlarmControlSnapshot(enabled: true))
+    }
+
+    func testStartupReconcilesAbandonedOperationWithPersistedPreference() throws {
+        for enabled in [false, true] {
+            let store = controlStore()
+            var lease: AlarmControlStateStore.ChangeLease? = try store.beginChange(to: true, currentEnabled: false)
+            XCTAssertNotNil(lease)
+            lease = nil
+            store.publish(enabled)
+            XCTAssertEqual(try store.snapshot(), AlarmControlSnapshot(enabled: enabled))
+        }
+    }
+
+    func testStalePendingDisplayDoesNotClaimSuccessOrAllowOverlappingExecution() throws {
+        let store = controlStore()
+        let now = Date()
+        let lease = try store.beginChange(to: true, currentEnabled: false, now: now)
+        for date in [now.addingTimeInterval(120), now.addingTimeInterval(-1)] {
+            let stale = try store.snapshot(now: date)
+            XCTAssertFalse(stale.isChanging)
+            XCTAssertFalse(stale.enabled)
+            XCTAssertTrue(stale.needsRecovery)
+        }
+        XCTAssertThrowsError(try store.beginChange(to: true, currentEnabled: false))
+        store.finishChange(lease, enabled: false)
+        XCTAssertFalse(try store.snapshot().needsRecovery)
+    }
+
+    func testOldCompletionCannotOverwriteAnotherSnapshot() throws {
+        let defaults = isolatedDefaults()
+        let store = controlStore(defaults: defaults)
+        let lease = try store.beginChange(to: true, currentEnabled: false)
+        let newer = AlarmControlSnapshot(enabled: false, change: .init(id: UUID(), requestedEnabled: true, startedAt: Date()))
+        defaults.set(try JSONEncoder().encode(newer), forKey: AlarmControlStateStore.snapshotKey)
+        store.finishChange(lease, enabled: true)
+        XCTAssertEqual(try store.snapshot(), newer)
+    }
+
+    func testCancellationClearsIntermediateStateAndReleasesOperationLock() async throws {
+        let store = controlStore()
+        var started = false
+        let task = Task {
+            try await store.withChange(to: true, currentEnabled: false, finalEnabled: { false }) {
+                started = true
+                try await Task.sleep(for: .seconds(60))
+            }
+        }
+        await waitUntil { started }
+        XCTAssertTrue(try store.snapshot().isChanging)
+        task.cancel()
+        do { try await task.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(try store.snapshot(), AlarmControlSnapshot(enabled: false))
+        let retry = try store.beginChange(to: true, currentEnabled: false)
+        store.finishChange(retry, enabled: true)
+    }
+
+    func testMissingSharedStorageDoesNotStartAlarmOperation() async {
+        let store = AlarmControlStateStore(defaults: nil, lockURL: isolatedLockURL(), reload: {})
+        do {
+            try await store.withChange(to: true, currentEnabled: false, finalEnabled: { false }) {
+                XCTFail("Do not start a control operation when its shared state cannot be written")
+            }
+            XCTFail("Expected storage error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, AlarmControlError.storageUnavailable.localizedDescription)
+        }
+    }
+
+    func testIntermediateStateSpansCloudLoadingAndAlarmKitScheduling() async throws {
+        let store = controlStore()
+        let client = FakeAlarmKitClient()
+        client.suspendNextSchedule = true
+        let scheduler = NotificationScheduler(defaults: isolatedDefaults(), alarmClient: client,
+            removeLegacyNotifications: {}, publishControlState: store.publish)
+        var cloud: CheckedContinuation<Void, Never>?
+        let task = Task {
+            try await store.withChange(to: true, currentEnabled: false, finalEnabled: { scheduler.alarmsEnabled }) {
+                try await scheduler.setAlarmsEnabledAndWait(true) {
+                    await withCheckedContinuation { cloud = $0 }
+                    return [self.group()]
+                }
+            }
+        }
+        await waitUntil { cloud != nil }
+        XCTAssertEqual(try store.snapshot().status, "Zapínání…")
+        XCTAssertFalse(try store.snapshot().enabled)
+        XCTAssertEqual(client.scheduleAttempts, 0)
+        cloud?.resume()
+        await waitUntil { client.waitingSchedule != nil }
+        XCTAssertTrue(try store.snapshot().isChanging)
+        XCTAssertFalse(try store.snapshot().enabled)
+        client.resumeSchedule()
+        try await task.value
+        XCTAssertEqual(try store.snapshot(), AlarmControlSnapshot(enabled: true))
+        XCTAssertEqual(client.records.count, 1)
+        try await store.withChange(to: false, currentEnabled: true, finalEnabled: { scheduler.alarmsEnabled }) {
+            XCTAssertEqual(try store.snapshot().status, "Vypínání…")
+            try await scheduler.setAlarmsEnabledAndWait(false) {
+                XCTFail("Disabling must not load iCloud")
+                return []
+            }
+        }
+        XCTAssertEqual(try store.snapshot(), AlarmControlSnapshot(enabled: false))
+        XCTAssertTrue(client.records.isEmpty)
+    }
+
+    func testFailedCloudAuthorizationOrSchedulingLeavesControlOffAndRetryable() async throws {
+        for failure in ["cloud", "authorization", "schedule"] {
+            let store = controlStore()
+            let client = FakeAlarmKitClient()
+            if failure == "authorization" { client.authorizationStatus = .denied }
+            if failure == "schedule" { client.failScheduleAttempt = 2 }
+            let scheduler = NotificationScheduler(defaults: isolatedDefaults(), alarmClient: client,
+                removeLegacyNotifications: {}, publishControlState: store.publish)
+            do {
+                try await store.withChange(to: true, currentEnabled: false, finalEnabled: { scheduler.alarmsEnabled }) {
+                    XCTAssertTrue(try store.snapshot().isChanging)
+                    try await scheduler.setAlarmsEnabledAndWait(true) {
+                        if failure == "cloud" { throw AlarmControlError.plansUnavailable }
+                        return [self.group(), self.group(at: Date().addingTimeInterval(1200))]
+                    }
+                }
+                XCTFail("Expected \(failure) error")
+            } catch {}
+            XCTAssertEqual(try store.snapshot(), AlarmControlSnapshot(enabled: false), failure)
+            XCTAssertTrue(client.records.isEmpty, failure)
+            let retry = try store.beginChange(to: true, currentEnabled: false)
+            store.finishChange(retry, enabled: false)
+        }
+    }
+
     func testUnchangedStartupProjectionDoesNotReloadControlInEitherState() throws {
         for enabled in [false, true] {
             let defaults = isolatedDefaults()
@@ -499,6 +722,16 @@ final class AlarmControlTests: XCTestCase {
         let suite = "AlarmControlTests.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }
         return UserDefaults(suiteName: suite)!
+    }
+
+    private func isolatedLockURL() -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AlarmControlTests-\(UUID())")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return directory.appendingPathComponent("operation.lock")
+    }
+
+    private func controlStore(defaults: UserDefaults? = nil, reload: @escaping () -> Void = {}) -> AlarmControlStateStore {
+        AlarmControlStateStore(defaults: defaults ?? isolatedDefaults(), lockURL: isolatedLockURL(), reload: reload)
     }
 
     private func fixture(enabled: Bool = false) -> (NotificationScheduler, FakeAlarmKitClient) {
