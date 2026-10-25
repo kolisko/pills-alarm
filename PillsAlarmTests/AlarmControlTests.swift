@@ -103,6 +103,67 @@ final class AlarmControlTests: XCTestCase {
         }
     }
 
+    func testPendingControlTintKeepsOptimisticTargetThroughSuccessfulReloads() throws {
+        for enabled in [false, true] {
+            let defaults = isolatedDefaults()
+            let store = controlStore(defaults: defaults)
+            store.publish(enabled)
+            XCTAssertEqual(try store.snapshot().displayedIsMuted, !enabled)
+            let optimisticMuted = enabled // WidgetKit flips the toggle immediately after a tap.
+            let lease = try store.beginChange(to: !enabled, currentEnabled: enabled)
+            for publication in [enabled, !enabled, enabled] {
+                store.publish(publication)
+                let pending = try store.snapshot()
+                XCTAssertEqual(pending.displayedIsMuted, optimisticMuted,
+                               "A provider reload must not revert the tint while the action runs")
+                XCTAssertEqual(pending.pendingTarget(isMuted: pending.displayedIsMuted), !enabled)
+                XCTAssertEqual(pending.displayedStatus(isMuted: pending.displayedIsMuted),
+                               enabled ? "Vypínání…" : "Zapínání…")
+                XCTAssertTrue(pending.isChanging)
+                XCTAssertEqual(pending.enabled, enabled, "The stored state is still unconfirmed")
+                XCTAssertEqual(defaults.bool(forKey: AlarmControlState.enabledKey), enabled)
+            }
+            store.finishChange(lease, enabled: !enabled)
+            let finished = try store.snapshot()
+            XCTAssertEqual(finished.displayedIsMuted, optimisticMuted,
+                           "Success changes the symbol, not the tint again")
+            XCTAssertNil(finished.pendingTarget(isMuted: finished.displayedIsMuted))
+            XCTAssertFalse(finished.isChanging)
+            XCTAssertEqual(finished.enabled, !enabled)
+        }
+    }
+
+    func testFailedControlChangeRestoresConfirmedTintInBothDirections() throws {
+        for enabled in [false, true] {
+            let store = controlStore()
+            store.publish(enabled)
+            let lease = try store.beginChange(to: !enabled, currentEnabled: enabled)
+            XCTAssertEqual(try store.snapshot().displayedIsMuted, enabled)
+            store.finishChange(lease, enabled: enabled)
+            let failed = try store.snapshot()
+            XCTAssertEqual(failed.displayedIsMuted, !enabled)
+            XCTAssertEqual(failed.enabled, enabled)
+            XCTAssertFalse(failed.isChanging)
+            XCTAssertNil(failed.pendingTarget(isMuted: failed.displayedIsMuted))
+        }
+    }
+
+    func testInterruptedControlChangeDoesNotKeepUnconfirmedTint() throws {
+        for enabled in [false, true] {
+            let store = controlStore()
+            var lease: AlarmControlStateStore.ChangeLease? =
+                try store.beginChange(to: !enabled, currentEnabled: enabled)
+            XCTAssertNotNil(lease)
+            XCTAssertEqual(try store.snapshot().displayedIsMuted, enabled)
+            lease = nil
+            let interrupted = try store.snapshot()
+            XCTAssertTrue(interrupted.needsRecovery)
+            XCTAssertEqual(interrupted.displayedIsMuted, !enabled)
+            XCTAssertEqual(interrupted.enabled, enabled)
+            XCTAssertFalse(interrupted.isChanging)
+        }
+    }
+
     func testSnapshotAdoptsLegacyStateAndDoesNotReloadOnUnchangedStartup() throws {
         for enabled in [false, true] {
             let defaults = isolatedDefaults()

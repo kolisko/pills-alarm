@@ -14,6 +14,9 @@ struct AlarmControlSnapshot: Codable, Equatable, Sendable {
     var needsRecovery = false
 
     var isChanging: Bool { change != nil }
+    // Match WidgetKit's optimistic tint on reload without committing the alarm preference early.
+    var displayedIsMuted: Bool { !(change?.requestedEnabled ?? enabled) }
+
     var status: String {
         if let change { return change.requestedEnabled ? "Zapínání…" : "Vypínání…" }
         if needsRecovery { return "Změna nedokončena" }

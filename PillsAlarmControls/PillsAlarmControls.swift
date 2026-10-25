@@ -12,7 +12,7 @@ struct PillsAlarmControls: WidgetBundle {
 struct PillsAlarmsControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: AlarmControlState.kind, provider: Provider()) { state in
-            ControlWidgetToggle("Alarmy Pills", isOn: !state.enabled, action: SetPillsAlarmsMutedIntent()) { isMuted in
+            ControlWidgetToggle("Alarmy Pills", isOn: state.displayedIsMuted, action: SetPillsAlarmsMutedIntent()) { isMuted in
                 Label {
                     Text(state.displayedStatus(isMuted: isMuted))
                 } icon: {
