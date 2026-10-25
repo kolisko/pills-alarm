@@ -3,7 +3,7 @@ import OSLog
 
 enum AlarmDiagnosticStage: String, Codable, Sendable {
     case appLaunch, intentBegin, intentSucceeded, intentFailed, intentCancelled, wrongProcess
-    case authorizationBegin, authorizationEnd, plansBegin, plansEnd
+    case authorizationBegin, authorizationEnd, plansBegin, plansWait, plansEnd
     case cloudBegin, cloudAccount, cloudUser, cloudZone, cloudSnapshots, cloudRepair, cloudSubscriptions, cloudEnd, cloudFailed
     case schedulingBegin, schedulingEnd, schedulingFailed, schedulingCancelled
     case stateSaved, controlPublished, controlRead, controlReadFailed
@@ -19,6 +19,7 @@ enum AlarmDiagnosticStage: String, Codable, Sendable {
         case .authorizationBegin: "Kontrola oprávnění AlarmKitu"
         case .authorizationEnd: "Výsledek oprávnění AlarmKitu"
         case .plansBegin: "Příprava plánů"
+        case .plansWait: "Čekání na probíhající načítání plánů"
         case .plansEnd: "Výsledek načítání plánů"
         case .cloudBegin: "Začátek načítání iCloudu"
         case .cloudAccount: "Stav účtu iCloud"

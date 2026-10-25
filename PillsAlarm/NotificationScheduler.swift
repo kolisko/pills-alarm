@@ -16,6 +16,7 @@ final class NotificationScheduler: ObservableObject {
     private var pendingOperation: Task<Void, Error>?
     private var operationID = UUID()
     private var alarmStateChangeID = UUID()
+    private var stateBeforePendingChange: Bool?
     private let publishControlState: @MainActor (Bool) -> Void
 
     @Published private(set) var lastScheduledCount = 0
@@ -30,7 +31,7 @@ final class NotificationScheduler: ObservableObject {
     @Published private(set) var alarmsEnabled: Bool {
         didSet {
             defaults.set(alarmsEnabled, forKey: Self.alarmsEnabledKey)
-            publishControlState(alarmsEnabled)
+            if !isChangingAlarmState { publishControlState(alarmsEnabled) }
         }
     }
     @Published var alarmSettings: AlarmSettings {
@@ -117,12 +118,16 @@ final class NotificationScheduler: ObservableObject {
         _ enabled: Bool,
         alarmGroups: @MainActor () async throws -> [ScheduledDoseAlarmGroup]
     ) async throws {
+        // Superseding requests share the last settled state, not an in-flight enable's value.
+        let wasEnabled = stateBeforePendingChange ?? alarmsEnabled
+        stateBeforePendingChange = wasEnabled
         let changeID = UUID()
         alarmStateChangeID = changeID
         isChangingAlarmState = true
         defer {
             if alarmStateChangeID == changeID {
                 isChangingAlarmState = false
+                stateBeforePendingChange = nil
                 publishControlState(alarmsEnabled)
             }
         }
@@ -145,13 +150,25 @@ final class NotificationScheduler: ObservableObject {
             AlarmControlDiagnostics.record(.stateSaved, fields: ["enabled": "\(alarmsEnabled)", "groups": "\(groups.count)"])
             rescheduleAlarmGroups(groups)
             await waitForPendingOperations()
+            try Task.checkCancellation()
             guard alarmStateChangeID == changeID else { throw CancellationError() }
             if let lastSchedulingError {
                 throw AlarmStateChangeError(message: lastSchedulingError)
             }
         } catch {
+            // A failed off-to-on request must not publish success or leave partial alarms behind.
+            var cleanupError: String?
+            if alarmStateChangeID == changeID, enabled, !wasEnabled, alarmsEnabled {
+                alarmsEnabled = false
+                rescheduleAlarmGroups([])
+                await waitForPendingOperations()
+                cleanupError = lastSchedulingError
+            }
             if alarmStateChangeID == changeID, !(error is CancellationError) {
                 lastSchedulingError = error.localizedDescription
+                if let cleanupError, cleanupError != error.localizedDescription {
+                    lastSchedulingError = "\(error.localizedDescription)\n\(cleanupError)"
+                }
             }
             throw error
         }

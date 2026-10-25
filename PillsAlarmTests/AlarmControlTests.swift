@@ -60,6 +60,136 @@ final class AlarmControlTests: XCTestCase {
         XCTAssertFalse(SetPillsAlarmsIntent(value: false).value)
     }
 
+    func testUnchangedStartupProjectionDoesNotReloadControlInEitherState() throws {
+        for enabled in [false, true] {
+            let defaults = isolatedDefaults()
+            var reloads = 0
+            AlarmControlState.publish(enabled, defaults: defaults) { reloads += 1 }
+            XCTAssertEqual(reloads, 1, "First launch must initialize missing shared state")
+            AlarmControlState.publish(enabled, defaults: defaults) { reloads += 1 }
+            XCTAssertEqual(reloads, 1, "Cold launch must not overwrite an in-progress control interaction")
+            XCTAssertEqual(try AlarmControlState.currentValue(defaults: defaults), enabled)
+            AlarmControlState.publish(!enabled, defaults: defaults) { reloads += 1 }
+            XCTAssertEqual(reloads, 2)
+            XCTAssertEqual(try AlarmControlState.currentValue(defaults: defaults), !enabled)
+        }
+    }
+
+    func testColdEnablePublishesOnlyAfterCloudAndAlarmKitHaveFinished() async throws {
+        let controlDefaults = isolatedDefaults()
+        controlDefaults.set(false, forKey: AlarmControlState.enabledKey)
+        var reloads = 0
+        let client = FakeAlarmKitClient()
+        client.suspendNextSchedule = true
+        let scheduler = NotificationScheduler(
+            defaults: isolatedDefaults(), alarmClient: client, removeLegacyNotifications: {},
+            publishControlState: { enabled in
+                AlarmControlState.publish(enabled, defaults: controlDefaults) { reloads += 1 }
+            }
+        )
+        scheduler.restoreAlarmState()
+        XCTAssertEqual(reloads, 0)
+        let readiness = PlanLoadReadiness()
+        readiness.beginReload()
+        var ready = false
+        var waitingForCloud = false
+        let intent = Task {
+            try await scheduler.setAlarmsEnabledAndWait(true) {
+                waitingForCloud = true
+                try await readiness.ensureReady(isReady: { ready }) { XCTFail("Use the startup sync") }
+                return [self.group()]
+            }
+        }
+        await waitUntil { waitingForCloud }
+        XCTAssertFalse(scheduler.alarmsEnabled)
+        XCTAssertEqual(client.scheduleAttempts, 0)
+        XCTAssertEqual(reloads, 0)
+        ready = true
+        readiness.endReload()
+        await waitUntil { client.waitingSchedule != nil }
+        XCTAssertTrue(scheduler.isChangingAlarmState)
+        XCTAssertFalse(try AlarmControlState.currentValue(defaults: controlDefaults))
+        XCTAssertEqual(reloads, 0, "Do not report enabled before AlarmKit replies")
+        client.resumeSchedule()
+        try await intent.value
+        XCTAssertEqual(client.records.count, 1)
+        XCTAssertTrue(try AlarmControlState.currentValue(defaults: controlDefaults))
+        XCTAssertEqual(reloads, 1)
+    }
+
+    func testFailedEnableRollsBackAndNeverPublishesEnabled() async {
+        let client = FakeAlarmKitClient()
+        client.failScheduleAttempt = 2
+        let defaults = isolatedDefaults()
+        var states: [Bool] = []
+        let scheduler = NotificationScheduler(
+            defaults: defaults, alarmClient: client, removeLegacyNotifications: {},
+            publishControlState: { states.append($0) }
+        )
+        do {
+            try await scheduler.setAlarmsEnabledAndWait(true) {
+                [self.group(), self.group(at: Date().addingTimeInterval(1200))]
+            }
+            XCTFail("Partial scheduling must not report success")
+        } catch {}
+        XCTAssertTrue(client.records.isEmpty)
+        XCTAssertFalse(scheduler.alarmsEnabled)
+        XCTAssertFalse(defaults.bool(forKey: NotificationScheduler.alarmsEnabledKey))
+        XCTAssertTrue(states.allSatisfy { !$0 })
+        XCTAssertNotNil(scheduler.lastSchedulingError)
+        XCTAssertFalse(scheduler.isChangingAlarmState)
+    }
+
+    func testCancelledEnableDrainsAlarmKitAndDoesNotPublishEnabled() async {
+        let client = FakeAlarmKitClient()
+        client.suspendNextSchedule = true
+        var states: [Bool] = []
+        let scheduler = NotificationScheduler(
+            defaults: isolatedDefaults(), alarmClient: client, removeLegacyNotifications: {},
+            publishControlState: { states.append($0) }
+        )
+        let intent = Task { try await scheduler.setAlarmsEnabledAndWait(true) { [self.group()] } }
+        await waitUntil { client.waitingSchedule != nil }
+        intent.cancel()
+        client.resumeSchedule()
+        do {
+            try await intent.value
+            XCTFail("Cancelled action must not succeed")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(client.records.isEmpty)
+        XCTAssertFalse(scheduler.alarmsEnabled)
+        XCTAssertTrue(states.allSatisfy { !$0 })
+        XCTAssertFalse(scheduler.isChangingAlarmState)
+    }
+
+    func testRepeatedEnableFailureDoesNotCommitEarlierUnfinishedEnable() async {
+        let client = FakeAlarmKitClient()
+        client.suspendNextSchedule = true
+        client.failScheduleAttempt = 2
+        var states: [Bool] = []
+        let scheduler = NotificationScheduler(
+            defaults: isolatedDefaults(), alarmClient: client, removeLegacyNotifications: {},
+            publishControlState: { states.append($0) }
+        )
+        let first = Task { try await scheduler.setAlarmsEnabledAndWait(true) { [self.group()] } }
+        await waitUntil { client.waitingSchedule != nil }
+        var secondStarted = false
+        let second = Task {
+            try await scheduler.setAlarmsEnabledAndWait(true) {
+                secondStarted = true
+                return [self.group()]
+            }
+        }
+        await waitUntil { secondStarted }
+        client.resumeSchedule()
+        if case .success = await first.result { XCTFail("Superseded action must not succeed") }
+        if case .success = await second.result { XCTFail("Scheduling failure must not succeed") }
+        XCTAssertFalse(scheduler.alarmsEnabled)
+        XCTAssertTrue(client.records.isEmpty)
+        XCTAssertTrue(states.allSatisfy { !$0 })
+        XCTAssertNotNil(scheduler.lastSchedulingError)
+    }
+
     func testBothStoredAlarmStatesSurviveControlInitialization() throws {
         for enabled in [true, false] {
             let defaults = isolatedDefaults()

@@ -57,12 +57,11 @@ struct SetPillsAlarmsIntent: SetValueIntent, LiveActivityIntent {
         try await NotificationScheduler.shared.setAlarmsEnabledAndWait(value) {
             let store = MedicationStore.shared
             AlarmControlDiagnostics.record(.plansBegin, fields: ["loadState": store.loadState.diagnosticName])
-            if store.loadState != .ready {
-                await store.reload(showSyncIndicator: false)
+            defer {
+                AlarmControlDiagnostics.record(.plansEnd, fields: ["loadState": store.loadState.diagnosticName,
+                    "medications": "\(store.medicationItems.count)", "confirmations": "\(store.confirmations.count)"])
             }
-            AlarmControlDiagnostics.record(.plansEnd, fields: ["loadState": store.loadState.diagnosticName,
-                "medications": "\(store.medicationItems.count)", "confirmations": "\(store.confirmations.count)"])
-            guard store.loadState == .ready else { throw AlarmControlError.plansUnavailable }
+            try await store.ensurePlansLoaded()
             return NotificationScheduler.shared.makeUpcomingDoseAlarmGroups(store: store)
         }
 #endif

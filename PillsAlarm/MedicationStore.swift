@@ -53,6 +53,7 @@ final class MedicationStore: ObservableObject {
     private var loadGeneration = 0
     private var syncOperationCount = 0
     private var hasLoadedCloudState = false
+    private let planLoadReadiness = PlanLoadReadiness()
 
     init(cloud: CloudKitRepository? = nil, defaults: UserDefaults = .standard) {
         self.cloud = cloud ?? CloudKitRepository()
@@ -131,17 +132,26 @@ final class MedicationStore: ObservableObject {
     func start() async {
         beginSync()
         defer { endSync() }
-        await reload()
+        if loadState == .ready {
+            await reload()
+        } else {
+            // An intent may have started the initial load before the app's scene task.
+            try? await ensurePlansLoaded()
+        }
         await NotificationScheduler.shared.requestAuthorizationIfNeeded()
         NotificationScheduler.shared.rescheduleUpcomingDoses(store: self)
         await NotificationScheduler.shared.waitForPendingOperations()
     }
 
-    func reload(showSyncIndicator: Bool = true, forceFullRecovery: Bool = false) async {
-        AlarmControlDiagnostics.record(.cloudBegin, fields: ["loadState": loadState.diagnosticName])
-        defer {
-            AlarmControlDiagnostics.record(.cloudEnd, fields: ["loadState": loadState.diagnosticName])
+    func ensurePlansLoaded() async throws {
+        try await planLoadReadiness.ensureReady(isReady: { self.loadState == .ready }) {
+            await self.reload(showSyncIndicator: false)
         }
+    }
+
+    func reload(showSyncIndicator: Bool = true, forceFullRecovery: Bool = false) async {
+        planLoadReadiness.beginReload()
+        defer { planLoadReadiness.endReload() }
         if showSyncIndicator {
             beginSync()
         }
@@ -153,6 +163,12 @@ final class MedicationStore: ObservableObject {
 
         loadGeneration += 1
         let generation = loadGeneration
+        AlarmControlDiagnostics.record(.cloudBegin, fields: ["loadState": loadState.diagnosticName,
+            "generation": "\(generation)", "activeReloads": "\(planLoadReadiness.activeReloadCount)"], always: true)
+        defer {
+            AlarmControlDiagnostics.record(.cloudEnd, fields: ["loadState": loadState.diagnosticName,
+                "generation": "\(generation)", "superseded": "\(generation != loadGeneration)"], always: true)
+        }
         let needsInitialLoadingState = loadState == .idle && groupRecord == nil && medications.isEmpty && members.isEmpty
         if needsInitialLoadingState {
             loadState = .loading

@@ -17,11 +17,21 @@ enum AlarmControlState {
 
     // A read-only projection for the extension. The existing app preference remains authoritative.
     static func publish(_ enabled: Bool) {
-        UserDefaults(suiteName: groupID)?.set(enabled, forKey: enabledKey)
-        AlarmControlDiagnostics.record(.controlPublished, fields: ["enabled": "\(enabled)"], always: true)
-        if #available(iOS 18.0, *) {
-            ControlCenter.shared.reloadControls(ofKind: kind)
+        publish(enabled, defaults: UserDefaults(suiteName: groupID)) {
+            if #available(iOS 18.0, *) {
+                ControlCenter.shared.reloadControls(ofKind: kind)
+            }
         }
+    }
+
+    static func publish(_ enabled: Bool, defaults: UserDefaults?, reload: () -> Void) {
+        guard let defaults else { return }
+        let changed = defaults.object(forKey: enabledKey) as? Bool != enabled
+        defaults.set(enabled, forKey: enabledKey)
+        AlarmControlDiagnostics.record(.controlPublished,
+            fields: ["enabled": "\(enabled)", "reloadRequested": "\(changed)"], always: true)
+        // A cold launch must not overwrite the control's pending action with an unchanged value.
+        if changed { reload() }
     }
 }
 
